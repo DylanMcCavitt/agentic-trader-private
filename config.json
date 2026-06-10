@@ -1,0 +1,11 @@
+{
+  "symbol": "SPY",
+  "account_number": "456234764",
+  "dry_run": true,
+  "position_fraction": 0.95,
+  "max_order_usd": 550,
+  "kill_drawdown_pct": 15,
+  "entry_rsi": 10.0,
+  "sma_trend": 200,
+  "sma_exit": 5
+}

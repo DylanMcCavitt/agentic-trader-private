@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit(./state/**)",
+      "Edit(./logs/**)",
+      "Write(./state/**)",
+      "Write(./logs/**)",
+      "Bash(uv run:*)",
+      "Bash(osascript:*)",
+      "Bash(uuidgen:*)",
+      "Bash(date:*)",
+      "Bash(sleep:*)",
+      "mcp__claude_ai_Robinhood"
+    ],
+    "deny": [
+      "Read(~/.secrets/**)",
+      "Read(./**/.env)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*place_equity_order",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/order_gate.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

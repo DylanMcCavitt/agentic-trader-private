@@ -1,0 +1,13 @@
+{
+  "hwm": 537.30,
+  "halt": false,
+  "halt_reason": null,
+  "last_run": "2026-06-09T22:20:50-04:00",
+  "last_action": {
+    "date": "2026-06-09",
+    "decision": "NONE",
+    "order_placed": false,
+    "order_id": null
+  },
+  "position_opened": null
+}
