@@ -44,7 +44,10 @@ market opinion. All numbered steps are mandatory.
 
 8. **Journal.** Append one entry to `logs/journal.md`:
    date/time ET, portfolio value, signal JSON, action taken (or DRY-RUN/blocked
-   reason), order id + fill state if any.
+   reason), order id + fill state if any. When describing a dollar-sized order,
+   always write it as notional with the share estimate and quote, e.g.
+   "BUY $510.43 notional of SPY (~0.70 sh at $727.08), market order" — never
+   "BUY SPY market $510.43", which reads like a limit price.
 
 9. **Update state.** Write `state/state.json`: `last_run` (ISO timestamp),
    `last_action` `{date, decision, order_placed: bool, order_id}`, and
