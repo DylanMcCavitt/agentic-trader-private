@@ -35,8 +35,14 @@ def rsi(series: pd.Series, period: int) -> pd.Series:
     return 100 - 100 / (1 + rs)
 
 
-def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None):
+def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None,
+        stop_pct=None):
+    """stop_pct: intraday stop-loss below entry (e.g. 0.08). Fills at the open
+    when the day gaps through the stop, else at the stop price. No same-day
+    re-entry after a stop-out."""
     px = df["Close"].copy()
+    opens = df["Open"].copy()
+    lows = df["Low"].copy()
     sma200 = px.rolling(200).mean()
     sma5 = px.rolling(5).mean()
     r2 = rsi(px, 2)
@@ -44,9 +50,11 @@ def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None):
     if start:
         mask = px.index >= start
         px, sma200, sma5, r2 = px[mask], sma200[mask], sma5[mask], r2[mask]
+        opens, lows = opens[mask], lows[mask]
     if end:
         mask = px.index <= end
         px, sma200, sma5, r2 = px[mask], sma200[mask], sma5[mask], r2[mask]
+        opens, lows = opens[mask], lows[mask]
 
     slip = SLIPPAGE_BPS / 1e4
     cash, shares = 1.0, 0.0
@@ -58,6 +66,20 @@ def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None):
     for i, (date, close) in enumerate(px.items()):
         if pd.notna(sma200.iloc[i]):
             in_pos = weight > 0
+            stopped_today = False
+            if in_pos and stop_pct and entry_date is not None and date > entry_date:
+                stop = entry_px * (1 - stop_pct)
+                fill = opens.iloc[i] if opens.iloc[i] <= stop else (
+                    stop if lows.iloc[i] <= stop else None)
+                if fill is not None:
+                    cash += shares * fill * (1 - slip)
+                    trades.append({
+                        "entry": entry_date, "exit": date,
+                        "ret": fill / entry_px - 1,
+                        "days": (date - entry_date).days,
+                    })
+                    shares, weight = 0.0, 0.0
+                    in_pos, stopped_today = False, True
             if in_pos and close > sma5.iloc[i]:
                 cash += shares * close * (1 - slip)
                 trades.append({
@@ -66,7 +88,7 @@ def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None):
                     "days": (date - entry_date).days,
                 })
                 shares, weight = 0.0, 0.0
-            elif close > sma200.iloc[i] and r2.iloc[i] < entry_rsi:
+            elif not stopped_today and close > sma200.iloc[i] and r2.iloc[i] < entry_rsi:
                 target = 1.0 if (scale_rsi and r2.iloc[i] < scale_rsi) else 0.5
                 if scale_rsi is None:
                     target = 1.0
@@ -110,5 +132,9 @@ if __name__ == "__main__":
             ("full  RSI<10 no-scale", {"scale_rsi": None}),
             ("2015+ RSI<10 scale<5", {"start": "2015-01-01"}),
             ("2020+ RSI<10 scale<5", {"start": "2020-01-01"}),
+            ("full  no-scale stop8%", {"scale_rsi": None, "stop_pct": 0.08}),
+            ("full  no-scale stop5%", {"scale_rsi": None, "stop_pct": 0.05}),
+            ("full  no-scale stop3%", {"scale_rsi": None, "stop_pct": 0.03}),
+            ("2015+ no-scale stop5%", {"scale_rsi": None, "stop_pct": 0.05, "start": "2015-01-01"}),
         ]:
             print(f"{label}: {run(df, **kw)}")
