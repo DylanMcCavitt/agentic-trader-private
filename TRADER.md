@@ -1,3 +1,5 @@
+> Disclaimer: this file is part of educational/reference software and is not financial or investment advice.
+
 # Daily trading run — RSI(2) mean reversion on SPY
 
 You are executing one scheduled trading check in the Robinhood **Agentic** account.
