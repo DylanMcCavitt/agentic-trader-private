@@ -121,15 +121,25 @@ def posterior_params(scored: dict, prior_std: float = PRIOR_STD) -> tuple:
     """(mean, std) of the Normal posterior on a strategy's true daily mean
     return. Scored books get the standard normal approximation
     N(decayed_mean, decayed_var / n_eff); insufficient books get the diffuse
-    prior N(0, prior_std^2) so they stay eligible and explore."""
-    if scored["insufficient"]:
+    prior N(0, prior_std^2) so they stay eligible and explore.
+
+    A scored book whose decayed std is at or below STD_FLOOR is float-noise
+    flat — the same "no evidence either way" convention decayed_sharpe uses
+    to score it 0.0 — and also gets the diffuse prior: a ~1e-17 posterior
+    std would otherwise be a delta function at the book's mean, winning (or
+    losing) every draw with zero exploration."""
+    if scored["insufficient"] or scored["std"] <= STD_FLOOR:
         return 0.0, prior_std
     return scored["mean"], math.sqrt(scored["std"] ** 2 / scored["n_eff"])
 
 
-def pick_seed(date_key: str, seed: int = 0) -> int:
-    """Deterministic base seed from a YYYY-MM-DD pick date plus an offset."""
-    return int(dt.date.fromisoformat(date_key).strftime("%Y%m%d")) + seed
+def pick_seed(date_key: str, seed: int = 0) -> str:
+    """Deterministic RNG key prefix from a YYYY-MM-DD pick date and a seed
+    offset. The seed is folded in as a separate token rather than added to
+    the date integer, so --seed 1 today never reproduces the exact RNG
+    stream of seed 0 tomorrow — a seeded re-roll is an independent draw,
+    not tomorrow's draws consumed early."""
+    return f"{dt.date.fromisoformat(date_key).strftime('%Y%m%d')}:{seed}"
 
 
 def thompson_pick(books: dict, date_key: str, seed: int = 0,
@@ -141,7 +151,7 @@ def thompson_pick(books: dict, date_key: str, seed: int = 0,
 
     Determinism: each strategy's RNG is random.Random(f"{base}:{name}") —
     a string seed (stdlib hashes it with sha512, immune to PYTHONHASHSEED)
-    built from the date-derived base seed and the strategy name, so the
+    built from the "YYYYMMDD:seed" key and the strategy name, so the
     result depends only on (date, seed, books) and never on dict insertion
     order. Strategy names are iterated sorted.
 
