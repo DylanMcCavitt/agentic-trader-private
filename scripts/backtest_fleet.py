@@ -171,6 +171,43 @@ def buy_and_hold(symbol: str, df: pd.DataFrame, pcfg: dict,
     return book
 
 
+def build_fleet_books(start: pd.Timestamp, end: str | None = None,
+                      iv_premium: float = 1.15, opt_slip: float = 0.015,
+                      rate: float = 0.04) -> dict:
+    """Backtest every enabled strategy plus hold_<symbol> buy-and-hold
+    baselines; returns {name: book} with each book's daily value history.
+    Additive entry point reused by scripts/replay_allocator.py; the CLI
+    below renders its perf rows from exactly these books."""
+    pcfg = CONFIG["paper"]
+    enabled = {n: s for n, s in CONFIG["strategies"].items() if s.get("enabled")}
+    symbols = set()
+    for spec in enabled.values():
+        symbols.update(spec.get("symbols", [spec.get("symbol")]))
+    dfs = {}
+    for s in sorted(symbols):
+        df = fetch_history(s, period="max")
+        if end:
+            df = df[df.index <= pd.Timestamp(end)]
+        dfs[s] = df
+
+    books = {}
+    for name, spec in enabled.items():
+        if spec["kind"] == "equity":
+            book = backtest_equity(spec, dfs[spec["symbol"]], pcfg, start)
+        elif spec["kind"] == "rotation":
+            book = backtest_rotation(spec, {s: dfs[s] for s in spec["symbols"]},
+                                     pcfg, start)
+        elif spec["kind"] == "option":
+            book = backtest_option(spec, dfs[spec["symbol"]], pcfg, start,
+                                   iv_premium, opt_slip, rate)
+        else:
+            continue
+        books[name] = book
+    for s in sorted(symbols):
+        books[f"hold_{s.lower()}"] = buy_and_hold(s, dfs[s], pcfg, start)
+    return books
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--start", default="2005-01-01")
@@ -183,34 +220,10 @@ def main() -> None:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     start = pd.Timestamp(args.start)
-    pcfg = CONFIG["paper"]
 
-    enabled = {n: s for n, s in CONFIG["strategies"].items() if s.get("enabled")}
-    symbols = set()
-    for spec in enabled.values():
-        symbols.update(spec.get("symbols", [spec.get("symbol")]))
-    dfs = {}
-    for s in sorted(symbols):
-        df = fetch_history(s, period="max")
-        if args.end:
-            df = df[df.index <= pd.Timestamp(args.end)]
-        dfs[s] = df
-
-    rows = {}
-    for name, spec in enabled.items():
-        if spec["kind"] == "equity":
-            book = backtest_equity(spec, dfs[spec["symbol"]], pcfg, start)
-        elif spec["kind"] == "rotation":
-            book = backtest_rotation(spec, {s: dfs[s] for s in spec["symbols"]},
-                                     pcfg, start)
-        elif spec["kind"] == "option":
-            book = backtest_option(spec, dfs[spec["symbol"]], pcfg, start,
-                                   args.iv_premium, args.opt_slip_pct, args.rate)
-        else:
-            continue
-        rows[name] = perf(book)
-    for s in sorted(symbols):
-        rows[f"hold_{s.lower()}"] = perf(buy_and_hold(s, dfs[s], pcfg, start))
+    books = build_fleet_books(start, args.end, args.iv_premium,
+                              args.opt_slip_pct, args.rate)
+    rows = {name: perf(book) for name, book in books.items()}
 
     if args.json:
         print(json.dumps(rows, indent=2, default=float))
