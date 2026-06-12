@@ -125,7 +125,7 @@ automatically.
 - `config.json` — symbol, sizing caps, dry_run flag, and shared strategy
   params; `config.local.json` (untracked) deep-merges over it and holds the
   real account number — see [`docs/config.md`](docs/config.md) for the full
-  reference
+  reference; `config.example.json` is a copyable starting point
 - `state/state.json` — untracked live state: high-water mark, halt flag,
   last action
 - `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
