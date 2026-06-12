@@ -97,7 +97,8 @@ def main() -> None:
         block(f"unknown side {side!r}")
 
     now = now_et()
-    if now.weekday() > 4 or not (9 <= now.hour < 16):
+    minutes = now.hour * 60 + now.minute
+    if now.weekday() > 4 or not (9 * 60 + 30 <= minutes < 16 * 60):
         block(f"outside regular market hours ({now:%a %H:%M} ET)")
 
     last = state.get("last_action") or {}
@@ -108,4 +109,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # fail closed: a crashing gate must block, never allow
+        block(f"gate error ({type(exc).__name__}: {exc})")
