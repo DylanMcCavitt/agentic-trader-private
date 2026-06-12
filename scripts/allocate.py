@@ -27,6 +27,7 @@ PAPER_PATH = ROOT / "state" / "paper.json"
 HALF_LIFE_DAYS = 63    # decay half-life in trading days (~one quarter)
 MIN_RETURNS = 20       # minimum daily returns before a score is trusted
 TRADING_DAYS = 252     # annualization base
+STD_FLOOR = 1e-12      # below this, std is float noise — treat as flat book
 
 
 # --- pure scoring functions (reused by allocator slices 2-4) -----------------
@@ -41,6 +42,8 @@ def daily_returns(history: list[dict]) -> list[float]:
 def decay_weights(n: int, half_life: float = HALF_LIFE_DAYS) -> list[float]:
     """Exponential decay weights, oldest first; the newest weight is 1 and a
     return half_life days older weighs half as much."""
+    if half_life <= 0:
+        raise ValueError(f"half_life must be > 0, got {half_life}")
     return [0.5 ** ((n - 1 - i) / half_life) for i in range(n)]
 
 
@@ -59,9 +62,11 @@ def decayed_stats(returns: list[float],
 def decayed_sharpe(returns: list[float],
                    half_life: float = HALF_LIFE_DAYS) -> float:
     """Annualized decayed Sharpe: decayed mean / decayed std * sqrt(252).
-    A flat book (zero std) scores 0.0 — no evidence either way."""
+    A flat book (std at or below float-noise level) scores 0.0 — no evidence
+    either way. The STD_FLOOR avoids astronomically large Sharpes when a
+    constant return series picks up ~1e-18 of float summation jitter."""
     s = decayed_stats(returns, half_life)
-    if s["std"] == 0.0:
+    if s["std"] <= STD_FLOOR:
         return 0.0
     return s["mean"] / s["std"] * math.sqrt(TRADING_DAYS)
 
@@ -69,9 +74,11 @@ def decayed_sharpe(returns: list[float],
 def score_book(book: dict, half_life: float = HALF_LIFE_DAYS,
                min_returns: int = MIN_RETURNS) -> dict:
     """Score one paper book. Books with fewer than min_returns daily returns
-    are flagged insufficient and carry no score."""
+    are flagged insufficient and carry no score. Non-finite returns (NaN/inf
+    from corrupted state) are likewise treated as insufficient — json
+    round-trips NaN, so a bad upstream mark must never rank first."""
     rets = daily_returns(book.get("history", []))
-    if len(rets) < min_returns:
+    if len(rets) < min_returns or not all(math.isfinite(r) for r in rets):
         return {"score": None, "mean": None, "std": None, "n_eff": None,
                 "days": len(rets), "insufficient": True}
     s = decayed_stats(rets, half_life)
@@ -99,6 +106,8 @@ def main() -> None:
     ap.add_argument("--half-life", type=float, default=HALF_LIFE_DAYS,
                     help=f"decay half-life in trading days (default {HALF_LIFE_DAYS})")
     args = ap.parse_args()
+    if args.half_life <= 0:
+        ap.error(f"--half-life must be > 0, got {args.half_life:g}")
 
     if not PAPER_PATH.exists():
         print(f"no paper state at {PAPER_PATH} — run scripts/run_strategies.py first",

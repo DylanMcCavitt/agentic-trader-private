@@ -76,6 +76,22 @@ def test_decayed_sharpe_zero_std_scores_zero():
     assert allocate.decayed_sharpe([0.0] * 30) == 0.0
 
 
+def test_decayed_sharpe_float_noise_std_scores_zero():
+    # returns recovered from compounding 1.01**i are constant up to ~1e-18
+    # float jitter; the std floor must treat that as a flat book, not blow
+    # up to a ~1e15 Sharpe
+    values = [100 * 1.01 ** i for i in range(31)]
+    rets = allocate.daily_returns([{"value": v} for v in values])
+    assert allocate.decayed_sharpe(rets) == 0.0
+
+
+def test_decay_weights_rejects_nonpositive_half_life():
+    with pytest.raises(ValueError):
+        allocate.decay_weights(5, half_life=0)
+    with pytest.raises(ValueError):
+        allocate.decay_weights(5, half_life=-10)
+
+
 def test_losing_streak_erodes_score_within_days():
     base = [0.005] * 60
     before = allocate.decayed_sharpe(base, half_life=10)
@@ -95,8 +111,10 @@ def test_recent_performance_outranks_equal_but_stale_performance():
 
 
 def test_rank_orders_by_score_desc_and_insufficient_last():
-    books = {"loser": make_book([-0.01] * 30),
-             "winner": make_book([0.01] * 30),
+    # alternating returns give each book meaningfully nonzero std by
+    # construction — the ordering must not hinge on cent-rounding noise
+    books = {"loser": make_book([-0.012, -0.008] * 15),
+             "winner": make_book([0.012, 0.008] * 15),
              "newbie": make_book([0.05] * 5)}  # huge returns but too few days
     rows = allocate.rank_books(books)
     assert [r["strategy"] for r in rows] == ["winner", "loser", "newbie"]
@@ -115,6 +133,19 @@ def test_book_at_minimum_window_is_scored():
     row = allocate.score_book(make_book([0.01] * allocate.MIN_RETURNS))
     assert row["insufficient"] is False
     assert row["score"] is not None
+
+
+def test_nan_book_value_is_insufficient_and_never_ranks_first():
+    # json round-trips NaN, so a corrupted mark can land in paper.json;
+    # the NaN score must not float to rank 1 via arbitrary sort ordering
+    corrupt = make_book([0.001 * (1 + i % 3) for i in range(30)])
+    corrupt["history"][15]["value"] = float("nan")
+    row = allocate.score_book(corrupt)
+    assert row["insufficient"] is True
+    assert row["score"] is None
+    rows = allocate.rank_books(
+        {"corrupt": corrupt, "winner": make_book([0.012, 0.008] * 15)})
+    assert [r["strategy"] for r in rows] == ["winner", "corrupt"]
 
 
 def test_empty_history_book_is_insufficient():
@@ -183,6 +214,17 @@ def test_main_half_life_flag_changes_scores(tmp_path, monkeypatch, capsys):
     run_main(monkeypatch, p, "--json", "--half-life", "500")
     long = json.loads(capsys.readouterr().out)["rows"][0]["score"]
     assert short > long  # short half-life concentrates on the recent good run
+
+
+@pytest.mark.parametrize("bad", ["0", "-5"])
+def test_main_nonpositive_half_life_is_usage_error(tmp_path, monkeypatch,
+                                                   capsys, bad):
+    p = tmp_path / "paper.json"
+    write_state(p, {"s": make_book([0.01] * 30)})
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, p, "--half-life", bad)
+    assert exc.value.code == 2  # argparse usage error, not a traceback
+    assert "--half-life must be > 0" in capsys.readouterr().err
 
 
 def test_main_table_marks_insufficient(tmp_path, monkeypatch, capsys):
