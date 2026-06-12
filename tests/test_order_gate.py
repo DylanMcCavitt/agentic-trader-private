@@ -171,7 +171,9 @@ def test_unknown_side_blocks(tmp_path):
 
 
 # 10. outside regular market hours / weekend -> block
-@pytest.mark.parametrize("now", [SATURDAY_NOW, AFTER_HOURS_NOW], ids=["weekend", "after-hours"])
+@pytest.mark.parametrize("now", [SATURDAY_NOW, AFTER_HOURS_NOW,
+                                 "2026-06-10T09:15:00"],
+                         ids=["weekend", "after-hours", "pre-open"])
 def test_outside_market_hours_blocks(tmp_path, now):
     result = run_gate(make_root(tmp_path), valid_buy(), now=now)
     assert_blocked(result, "outside regular market hours")
@@ -182,6 +184,33 @@ def test_second_order_same_day_blocks(tmp_path):
     state = dict(BASE_STATE, last_action={"date": "2026-06-10", "order_placed": True})
     result = run_gate(make_root(tmp_path, state=state), valid_buy())
     assert_blocked(result, "already placed today")
+
+
+# 11b. any crash inside the gate -> block, never allow (fail closed)
+@pytest.mark.parametrize("kw", [
+    {"order": "non-numeric-amount"},
+    {"config": dict(BASE_CONFIG, max_order_usd="lots")},
+], ids=["bad-amount", "bad-config-cap"])
+def test_gate_crash_fails_closed(tmp_path, kw):
+    order = valid_buy(dollar_amount="$100") if kw.get("order") else valid_buy()
+    config = kw.get("config", _OMIT)
+    result = run_gate(make_root(tmp_path, config=config), order)
+    assert_blocked(result, "gate error")
+
+
+# 11c. malformed stdin payload -> block, never an unhandled traceback
+def test_malformed_stdin_fails_closed(tmp_path):
+    env = os.environ.copy()
+    env["ORDER_GATE_ROOT"] = str(make_root(tmp_path))
+    env["ORDER_GATE_NOW"] = MARKET_OPEN_NOW
+    result = subprocess.run(
+        [sys.executable, str(GATE)],
+        input="{not json",
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert_blocked(result, "gate error")
 
 
 # 12. missing or corrupt state file -> block (fail closed)
