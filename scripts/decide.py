@@ -1,6 +1,6 @@
 """Compute the RSI(2) mean-reversion decision for today.
 
-Usage: uv run scripts/signal.py --price <live_price> --holding <true|false>
+Usage: uv run scripts/decide.py --price <live_price> --holding <true|false>
 
 Fetches daily history (auto-adjusted) through the prior session, appends
 --price as today's provisional close, and prints a decision JSON. Indicator

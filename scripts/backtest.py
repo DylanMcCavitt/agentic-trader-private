@@ -5,11 +5,21 @@ Rules:
   scale: optional second tranche when RSI(2) < scale_rsi
   exit:  close > SMA5                            -> sell at close
 Costs: slippage_bps per side, zero commission.
+
+Defaults for entry_rsi, scale_rsi, and slippage_bps come from config.json
+(the same config scripts/decide.py reads). CLI flags override them for
+parameter sweeps only — they never change the live config.
 """
+import argparse
+import json
+from pathlib import Path
+
 import pandas as pd
 import yfinance as yf
 
-SLIPPAGE_BPS = 2.0
+CONFIG = json.loads((Path(__file__).parent.parent / "config.json").read_text())
+
+_UNSET = object()  # sentinel: scale_rsi=None is meaningful (no scale-in)
 
 
 def fetch(symbol: str) -> pd.DataFrame:
@@ -31,11 +41,20 @@ def rsi(series: pd.Series, period: int) -> pd.Series:
     return 100 - 100 / (1 + rs)
 
 
-def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None,
-        stop_pct=None):
+def run(df: pd.DataFrame, entry_rsi=None, scale_rsi=_UNSET, start=None, end=None,
+        stop_pct=None, slippage_bps=None):
     """stop_pct: intraday stop-loss below entry (e.g. 0.08). Fills at the open
     when the day gaps through the stop, else at the stop price. No same-day
-    re-entry after a stop-out."""
+    re-entry after a stop-out.
+
+    entry_rsi/scale_rsi/slippage_bps default to config.json values when not
+    given; pass scale_rsi=None to disable the second tranche."""
+    if entry_rsi is None:
+        entry_rsi = CONFIG["entry_rsi"]
+    if scale_rsi is _UNSET:
+        scale_rsi = CONFIG["scale_rsi"]
+    if slippage_bps is None:
+        slippage_bps = CONFIG["slippage_bps"]
     px = df["Close"].copy()
     opens = df["Open"].copy()
     lows = df["Low"].copy()
@@ -52,7 +71,7 @@ def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None,
         px, sma200, sma5, r2 = px[mask], sma200[mask], sma5[mask], r2[mask]
         opens, lows = opens[mask], lows[mask]
 
-    slip = SLIPPAGE_BPS / 1e4
+    slip = slippage_bps / 1e4
     cash, shares = 1.0, 0.0
     weight = 0.0  # 0, 0.5, 1.0
     equity = []
@@ -120,17 +139,32 @@ def run(df: pd.DataFrame, entry_rsi=10.0, scale_rsi=5.0, start=None, end=None,
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--entry-rsi", type=float, default=None,
+                    help=f"override config entry_rsi (config: {CONFIG['entry_rsi']})")
+    ap.add_argument("--scale-rsi", type=float, default=None,
+                    help=f"override config scale_rsi (config: {CONFIG['scale_rsi']})")
+    ap.add_argument("--slippage-bps", type=float, default=None,
+                    help=f"override config slippage_bps (config: {CONFIG['slippage_bps']})")
+    args = ap.parse_args()
+    base = {k: v for k, v in {
+        "entry_rsi": args.entry_rsi, "scale_rsi": args.scale_rsi,
+        "slippage_bps": args.slippage_bps,
+    }.items() if v is not None}
+    er = base.get("entry_rsi", CONFIG["entry_rsi"])
+    sr = base.get("scale_rsi", CONFIG["scale_rsi"])
+
     for sym in ["SPY", "QQQ"]:
         df = fetch(sym)
         print(f"\n=== {sym} (data {df.index[0].date()} -> {df.index[-1].date()}) ===")
         for label, kw in [
-            ("full  RSI<10 scale<5", {}),
-            ("full  RSI<10 no-scale", {"scale_rsi": None}),
-            ("2015+ RSI<10 scale<5", {"start": "2015-01-01"}),
-            ("2020+ RSI<10 scale<5", {"start": "2020-01-01"}),
+            (f"full  RSI<{er:g} scale<{sr:g}", {}),
+            (f"full  RSI<{er:g} no-scale", {"scale_rsi": None}),
+            (f"2015+ RSI<{er:g} scale<{sr:g}", {"start": "2015-01-01"}),
+            (f"2020+ RSI<{er:g} scale<{sr:g}", {"start": "2020-01-01"}),
             ("full  no-scale stop8%", {"scale_rsi": None, "stop_pct": 0.08}),
             ("full  no-scale stop5%", {"scale_rsi": None, "stop_pct": 0.05}),
             ("full  no-scale stop3%", {"scale_rsi": None, "stop_pct": 0.03}),
             ("2015+ no-scale stop5%", {"scale_rsi": None, "stop_pct": 0.05, "start": "2015-01-01"}),
         ]:
-            print(f"{label}: {run(df, **kw)}")
+            print(f"{label}: {run(df, **{**base, **kw})}")
