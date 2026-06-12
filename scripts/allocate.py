@@ -2,6 +2,7 @@
 
 Usage: uv run scripts/allocate.py [--json] [--half-life DAYS]
        uv run scripts/allocate.py --pick [--date YYYY-MM-DD] [--seed N] [--json]
+       uv run scripts/allocate.py --pick --record [--force] [...]
 
 Allocator slice 1: the scoring foundation of the bandit allocator. Reads
 every strategy's paper book from state/paper.json (written by
@@ -25,7 +26,17 @@ day's champion. Weights are rank-normalized over the draws (Borda: best of
 n gets n/(n(n+1)/2), worst gets 1/(n(n+1)/2)) — draws live on a ~1e-3 daily
 return scale where a raw softmax would be indistinguishable from uniform.
 
-Recommend-only: never touches config, order gates, or any live trading path.
+Allocator slice 3 (--record, composes with --pick): verdict persistence.
+The day's pick (date, champion, per-strategy weights and decayed-Sharpe
+scores) is appended to an untracked history at state/allocator.json so
+the allocator builds a visible track record. Idempotent per day like the
+paper fleet's same-day guard: re-running an already-recorded date is a
+no-op that says so; --force re-evaluates and replaces that day's entry.
+Writes are atomic (tmp + replace) and history entries stay chronological.
+
+Recommend-only: never touches config, order gates, or any live trading
+path. The recorded verdict is never read by the order gates; promoting a
+champion to live is a deliberate human config change.
 """
 import argparse
 import datetime as dt
@@ -37,6 +48,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 PAPER_PATH = ROOT / "state" / "paper.json"
+ALLOC_PATH = ROOT / "state" / "allocator.json"
 
 HALF_LIFE_DAYS = 63    # decay half-life in trading days (~one quarter)
 MIN_RETURNS = 20       # minimum daily returns before a score is trusted
@@ -177,10 +189,88 @@ def thompson_pick(books: dict, date_key: str, seed: int = 0,
             "rows": rows}
 
 
+# --- verdict persistence (allocator slice 3) -----------------------------------
+
+def pick_entry(result: dict, books: dict,
+               half_life: float = HALF_LIFE_DAYS,
+               min_returns: int = MIN_RETURNS) -> dict:
+    """One allocator-history entry from a thompson_pick result: the date,
+    champion, and per-strategy weights and decayed-Sharpe scores (None for
+    insufficient-data books)."""
+    return {"date": result["date"], "seed": result["seed"],
+            "half_life_days": half_life,
+            "champion": result["champion"],
+            "weights": {r["strategy"]: round(r["weight"], 6)
+                        for r in result["rows"]},
+            "scores": {name: score_book(books[name], half_life,
+                                        min_returns)["score"]
+                       for name in sorted(books)}}
+
+
+def upsert_pick(picks: list, entry: dict, force: bool = False) -> str:
+    """Insert an entry into the chronological picks list, idempotent per
+    date: an already-recorded date is skipped unless force replaces it in
+    place. Returns "recorded", "replaced", or "skipped"."""
+    for i, p in enumerate(picks):
+        if p["date"] == entry["date"]:
+            if not force:
+                return "skipped"
+            picks[i] = entry
+            return "replaced"
+    picks.append(entry)
+    picks.sort(key=lambda p: p["date"])
+    return "recorded"
+
+
+def verdict_line(entry: dict) -> str:
+    """The one-line verdict TRADER.md copies into the journal entry."""
+    score = entry["scores"].get(entry["champion"])
+    score_s = f"{score:.2f}" if score is not None else "n/a"
+    weight = entry["weights"][entry["champion"]]
+    return (f"champion today: {entry['champion']} "
+            f"(score {score_s}, weight {weight:.4f})")
+
+
+def record_pick(result: dict, books: dict, half_life: float,
+                force: bool = False, path=None) -> dict:
+    """Persist a --pick result to the untracked allocator history. Atomic
+    write (tmp + replace, like run_strategies.py does for paper.json).
+
+    The history is a track record only: it is never read by the order
+    gates and changes no config — promoting a champion to live trading is
+    a deliberate human config change."""
+    path = path if path is not None else ALLOC_PATH
+    if result["champion"] is None:
+        return {"status": "empty", "path": str(path), "verdict": None}
+    history = {"picks": []}
+    if path.exists():
+        try:
+            history = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            print(f"unreadable allocator history at {path}: {exc}",
+                  file=sys.stderr)
+            sys.exit(1)
+        history.setdefault("picks", [])
+    entry = pick_entry(result, books, half_life)
+    status = upsert_pick(history["picks"], entry, force=force)
+    if status == "skipped":
+        stored = next(p for p in history["picks"]
+                      if p["date"] == entry["date"])
+        return {"status": status, "path": str(path),
+                "verdict": verdict_line(stored)}
+    path.parent.mkdir(exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")  # atomic: a crash mid-write must
+    tmp.write_text(json.dumps(history, indent=2))  # not truncate history
+    tmp.replace(path)
+    return {"status": status, "path": str(path),
+            "verdict": verdict_line(entry)}
+
+
 # --- CLI ----------------------------------------------------------------------
 
-def print_pick(result: dict, state: dict, args) -> None:
-    """Render a thompson_pick result as a table or --json."""
+def print_pick(result: dict, state: dict, args, record=None) -> None:
+    """Render a thompson_pick result as a table or --json; record is the
+    record_pick summary when --record persisted (or skipped) the pick."""
     if args.json:
         rows = [{**r,
                  "draw": round(r["draw"], 8),
@@ -188,15 +278,20 @@ def print_pick(result: dict, state: dict, args) -> None:
                  "post_mean": round(r["post_mean"], 8),
                  "post_std": round(r["post_std"], 8)}
                 for r in result["rows"]]
-        print(json.dumps({"as_of": state.get("last_run_date"),
-                          "date": result["date"], "seed": result["seed"],
-                          "half_life_days": args.half_life,
-                          "prior_std": PRIOR_STD,
-                          "champion": result["champion"],
-                          "rows": rows}, indent=2))
+        out = {"as_of": state.get("last_run_date"),
+               "date": result["date"], "seed": result["seed"],
+               "half_life_days": args.half_life,
+               "prior_std": PRIOR_STD,
+               "champion": result["champion"],
+               "rows": rows}
+        if record is not None:
+            out["record"] = record
+        print(json.dumps(out, indent=2))
         return
     if result["champion"] is None:
         print(f"no books in paper state — nothing to pick for {result['date']}")
+        if record is not None:
+            print("nothing recorded")
         return
     print(f"thompson pick for {result['date']} (seed offset {result['seed']}, "
           f"half-life {args.half_life:g}d)")
@@ -210,6 +305,15 @@ def print_pick(result: dict, state: dict, args) -> None:
         print(f"{i:>2} {r['strategy']:<24} {r['draw']:>10.6f} "
               f"{r['weight']:>7.4f} {r['post_mean']:>10.6f} "
               f"{r['post_std']:>10.6f} {r['days']:>4}  {note}".rstrip())
+    if record is not None:
+        print()
+        if record["status"] == "skipped":
+            print(f"already recorded for {result['date']} — no-op "
+                  f"(--force re-evaluates and replaces)")
+        else:
+            print(f"{record['status']} pick for {result['date']} "
+                  f"-> {record['path']}")
+        print(record["verdict"])
 
 
 def main() -> None:
@@ -223,11 +327,20 @@ def main() -> None:
                     help="pick date for RNG seeding (default: today; --pick only)")
     ap.add_argument("--seed", type=int, default=0,
                     help="seed offset added to the date seed (--pick only)")
+    ap.add_argument("--record", action="store_true",
+                    help="persist the pick to state/allocator.json (--pick only)")
+    ap.add_argument("--force", action="store_true",
+                    help="re-evaluate and replace an already-recorded date "
+                         "(--record only)")
     args = ap.parse_args()
     if args.half_life <= 0:
         ap.error(f"--half-life must be > 0, got {args.half_life:g}")
     if (args.date is not None or args.seed != 0) and not args.pick:
         ap.error("--date/--seed only apply with --pick")
+    if args.record and not args.pick:
+        ap.error("--record only applies with --pick")
+    if args.force and not args.record:
+        ap.error("--force only applies with --record")
     pick_date = args.date if args.date is not None else dt.date.today().isoformat()
     if args.pick:
         try:
@@ -253,7 +366,9 @@ def main() -> None:
     if args.pick:
         result = thompson_pick(state.get("books", {}), pick_date,
                                seed=args.seed, half_life=args.half_life)
-        print_pick(result, state, args)
+        record = (record_pick(result, state.get("books", {}), args.half_life,
+                              force=args.force) if args.record else None)
+        print_pick(result, state, args, record)
         return
 
     rows = rank_books(state.get("books", {}), half_life=args.half_life)

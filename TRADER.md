@@ -12,7 +12,7 @@ market opinion. All numbered steps are mandatory.
    holds the real `account_number`). Use that merged config everywhere below.
    If `account_number` is missing or `REPLACE_ME`, stop — the order gate will
    block everything anyway. Read `state/state.json`. If `halt` is true: log
-   "halted: <reason>" to the journal (step 8), notify (step 9), stop.
+   "halted: <reason>" to the journal (step 10), notify (step 12), stop.
 
 2. **Confirm the market is open today.** Get a SPY quote via the Robinhood MCP
    (`get_equity_quotes`). If the quote's last-trade timestamp is not from today
@@ -57,19 +57,29 @@ market opinion. All numbered steps are mandatory.
    fleet must never block the live run. Include each strategy's `action` and
    `value` from its JSON output in the journal entry (one line per strategy).
 
-9. **Journal.** Append one entry to `logs/journal.md`:
-   date/time ET, portfolio value, signal JSON, action taken (or DRY-RUN/blocked
-   reason), order id + fill state if any. When describing a dollar-sized order,
-   always write it as notional with the share estimate and quote, e.g.
-   "BUY $510.43 notional of SPY (~0.70 sh at $727.08), market order" — never
-   "BUY SPY market $510.43", which reads like a limit price.
+9. **Allocator verdict.** Run:
+   `uv run scripts/allocate.py --pick --record`
+   This Thompson-samples today's champion across the paper books and appends
+   the verdict to untracked `state/allocator.json` (a same-day re-run is a
+   no-op — do not add `--force`). Include its one-line verdict in the journal
+   entry (step 10), format: "champion today: <name> (score <decayed sharpe>,
+   weight <w>)". The verdict is recommend-only: it changes no config and is
+   never read by the order gates. If it errors, journal the error text and
+   continue; the allocator must never block the live run.
 
-10. **Update state.** Write `state/state.json`: `last_run` (ISO timestamp),
+10. **Journal.** Append one entry to `logs/journal.md`:
+    date/time ET, portfolio value, signal JSON, action taken (or DRY-RUN/blocked
+    reason), order id + fill state if any. When describing a dollar-sized order,
+    always write it as notional with the share estimate and quote, e.g.
+    "BUY $510.43 notional of SPY (~0.70 sh at $727.08), market order" — never
+    "BUY SPY market $510.43", which reads like a limit price.
+
+11. **Update state.** Write `state/state.json`: `last_run` (ISO timestamp),
     `last_action` `{date, decision, order_placed: bool, order_id}`, and
     `position_opened` (set to today's date on a fill of a buy; null after a
     sell fills; otherwise leave unchanged).
 
-11. **Notify.** `osascript -e 'display notification "<decision + value>" with title "Agentic Trader"'`.
+12. **Notify.** `osascript -e 'display notification "<decision + value>" with title "Agentic Trader"'`.
 
 Hard rules: trade only the symbol and account in the merged config; at most one
 order per run; never use margin features; never place an order the review step

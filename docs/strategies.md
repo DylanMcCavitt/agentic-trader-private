@@ -86,6 +86,29 @@ historical chain data (e.g. QuantConnect/LEAN).
 
 Indicators warm up on data before `--start`; trading begins at `--start`.
 
+## Allocator (recommend-only)
+
+`scripts/allocate.py` ranks the paper books by exponentially decayed Sharpe
+of daily book returns, and `--pick` Thompson-samples a daily champion from
+the same books. The daily run (step 9 of [TRADER.md](../TRADER.md)) records
+the verdict:
+
+```bash
+uv run scripts/allocate.py --pick --record
+```
+
+Each verdict (date, champion, per-strategy weights and scores) is appended
+to untracked `state/allocator.json` — idempotent per day; `--force`
+re-evaluates and replaces that day's entry — so the allocator builds a
+visible track record. `scripts/scoreboard.py` surfaces the current champion
+and the recent pick history with switch markers.
+
+The allocator is strictly recommend-only: its verdict changes no config and
+is never read by the order gates (`scripts/order_gate.py`,
+`scripts/option_gate.py`). Promoting a champion to live trading is a
+deliberate human config change via the promotion path below — never an
+automatic consequence of a pick.
+
 ## Promotion path
 
 1. Let the fleet run dry for several weeks; watch `scripts/scoreboard.py`.
