@@ -16,6 +16,13 @@ Robinhood's official Agentic Trading MCP.
   buy-and-hold absolutely — its appeal is high per-trade expectancy with low
   exposure and shallow drawdowns. Reproduce with `uv run scripts/backtest.py`.
 
+## Setup
+
+Dependencies are managed by a root `pyproject.toml` + committed `uv.lock`
+(pandas, yfinance; pytest in the dev group). `uv sync` from a clean checkout
+builds the env; `uv run scripts/<x>.py` resolves against the project env
+automatically — no per-script inline metadata.
+
 ## How a run works
 
 `launchd` (com.dylan.agentic-trader, weekdays 15:45 ET) → `run.sh`
@@ -39,6 +46,7 @@ Robinhood's official Agentic Trading MCP.
 
 ## Files
 
+- `pyproject.toml` / `uv.lock` — pinned dependencies (uv-managed)
 - `config.json` — symbol, sizing caps, dry_run flag; `account_number` is the
   `REPLACE_ME` placeholder
 - `config.local.json` — untracked (gitignored) local overrides, deep-merged

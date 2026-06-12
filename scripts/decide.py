@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["pandas", "yfinance"]
-# ///
 """Compute the RSI(2) mean-reversion decision for today.
 
 Usage: uv run scripts/signal.py --price <live_price> --holding <true|false>
