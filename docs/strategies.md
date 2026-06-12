@@ -130,3 +130,48 @@ stays in `state/paper.json` but stops updating). Add one by combining an
 existing signal with new params, or write a new signal function and register
 it in `scripts/strategies/__init__.py`. Books are keyed by strategy name —
 rename means a fresh book.
+
+## Replaying the allocator over history
+
+Slice 4 of the allocator: evidence that the Thompson champion scheme adds
+value before anyone trusts its picks.
+
+```bash
+uv run scripts/replay_allocator.py                     # 2005 -> today (network)
+uv run scripts/replay_allocator.py --books books.json  # offline, hermetic
+```
+
+`scripts/replay_allocator.py` rebuilds each strategy's daily book values
+with the fleet backtester (`backtest_fleet.build_fleet_books`), then
+replays `scripts/allocate.py --pick` day by day. The convention, chosen so
+there is no lookahead: the champion traded on day *t* is Thompson-sampled
+from book values dated *t−1* and earlier, with the RNG keyed by day *t*'s
+date (and `--seed`) via `allocate.pick_seed` — exactly the date-seeded
+scheme the live `--pick` runs each morning, when only yesterday's marks
+exist. Day *t*'s meta-return is then that prior-data champion's
+*t−1 → t* book return; the meta-portfolio always holds the current
+champion's book (cash for a day the champion has no mark). Picks are
+daily.
+
+The report compares CAGR / Sharpe / maxDD (same `perf` formulas as
+`backtest_fleet.py`) for the meta-portfolio against the best and worst
+single strategy in hindsight, the daily-rebalanced equal-weight fleet, and
+the `hold_*` buy-and-hold baselines — baselines are never allocator
+candidates — plus a champion timeline of compact segments and the total
+switch count. `--start`/`--end` bound the replay window (book history
+before `--start` still informs scores: it is in the past, not lookahead),
+`--half-life` and `--seed` pass through to the allocator, `--warmup`
+(default 21 trading days, enough for the first pick to be scoreable)
+delays the first pick, and `--json` emits the machine-readable report —
+byte-identical for the same inputs.
+
+`--books PATH` replays a JSON file of per-strategy daily book values
+instead of hitting the network — either paper.json-style
+`{"books": {name: {"history": [{"date", "value"}, ...]}}}` or a flat
+`{name: [{"date", "value"}, ...]}` mapping. That is how the tests stay
+hermetic, including the no-lookahead test that injects a one-day +50%
+spike into a book and proves the meta-portfolio cannot capture it.
+
+Inherited caveat: the options books come from Black-Scholes-priced
+synthetic contracts (see "Backtesting the fleet" above), so the replay is
+directional evidence that the allocator adds value, not truth.
