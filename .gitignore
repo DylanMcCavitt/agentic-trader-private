@@ -3,4 +3,5 @@ __pycache__/
 .DS_Store
 config.local.json
 state/state.json
+state/paper.json
 .venv/
