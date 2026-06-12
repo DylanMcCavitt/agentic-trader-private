@@ -23,12 +23,16 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
 import paper
+from order_gate import deep_merge
 from strategies import SIGNALS, signals
 from strategies import contracts as oc
 from strategies.common import fetch_history
 
 ROOT = Path(__file__).parent.parent
 CONFIG = json.loads((ROOT / "config.json").read_text())
+_LOCAL = ROOT / "config.local.json"
+if _LOCAL.exists():
+    CONFIG = deep_merge(CONFIG, json.loads(_LOCAL.read_text()))
 PAPER_PATH = ROOT / "state" / "paper.json"
 LOG_PATH = ROOT / "logs" / "paper.md"
 
@@ -218,7 +222,9 @@ def main() -> None:
 
     state["last_run_date"] = today
     PAPER_PATH.parent.mkdir(exist_ok=True)
-    PAPER_PATH.write_text(json.dumps(state, indent=2))
+    tmp = PAPER_PATH.with_suffix(".json.tmp")  # atomic: a crash mid-write
+    tmp.write_text(json.dumps(state, indent=2))  # must not truncate the books
+    tmp.replace(PAPER_PATH)
     append_log(today, results)
     print(json.dumps({"date": today, "results": results}, indent=2))
 

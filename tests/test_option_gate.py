@@ -202,8 +202,9 @@ def test_premium_over_cap_blocks(tmp_path):
 
 
 # 10. market hours -> block
-@pytest.mark.parametrize("now", [SATURDAY_NOW, AFTER_HOURS_NOW],
-                         ids=["weekend", "after-hours"])
+@pytest.mark.parametrize("now", [SATURDAY_NOW, AFTER_HOURS_NOW,
+                                 "2026-06-10T09:15:00"],
+                         ids=["weekend", "after-hours", "pre-open"])
 def test_outside_market_hours_blocks(tmp_path, now):
     result = run_gate(make_root(tmp_path), valid_open(), now=now)
     assert_blocked(result, "outside regular market hours")
@@ -223,6 +224,31 @@ def test_equity_order_today_does_not_block_option(tmp_path):
                  last_action={"date": "2026-06-10", "order_placed": True})
     result = run_gate(make_root(tmp_path, state=state), valid_open())
     assert result.returncode == 0, result.stderr
+
+
+# 11b. the gate records the allowed attempt itself, so a second order the
+# same day is blocked without any other writer touching the state file
+def test_allow_records_attempt_and_blocks_second_order(tmp_path):
+    root = make_root(tmp_path)
+    first = run_gate(root, valid_open())
+    assert first.returncode == 0, first.stderr
+    recorded = json.loads((root / "state" / "state.json").read_text())
+    assert recorded["last_option_action"] == {"date": "2026-06-10",
+                                              "order_placed": True}
+    assert_blocked(run_gate(root, valid_open()),
+                   "option order was already placed today")
+
+
+# 11c. any crash inside the gate -> block, never allow (fail closed)
+@pytest.mark.parametrize("kw", [
+    {"order": "non-numeric-price"},
+    {"config": dict(BASE_CONFIG, max_option_premium_usd="lots")},
+], ids=["bad-price", "bad-config-cap"])
+def test_gate_crash_fails_closed(tmp_path, kw):
+    order = valid_open(price="$5.00") if kw.get("order") else valid_open()
+    config = kw.get("config", _OMIT)
+    result = run_gate(make_root(tmp_path, config=config), order)
+    assert_blocked(result, "gate error")
 
 
 # 12. missing/corrupt config or state -> block (fail closed)

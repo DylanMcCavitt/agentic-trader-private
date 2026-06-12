@@ -8,7 +8,9 @@ fail closed on any unreadable config/state. Options-specific rules:
   sell+open (short premium) and anything else is blocked outright.
 - opens must be limit orders with a price; premium (price x qty x 100) is
   capped by max_option_premium_usd, contracts by max_option_contracts.
-- at most one option order per day (state last_option_action).
+- at most one option order per day: on allow, the gate records the attempt
+  in state last_option_action (a pre-tool-use record — it counts allowed
+  attempts, not fills, which errs on the side of blocking).
 
 Known limit: the order payload carries only the option instrument UUID, so
 the underlying symbol cannot be verified here without a network call. The
@@ -123,15 +125,24 @@ def main() -> None:
                   f"max_option_premium_usd {max_premium}")
 
     now = now_et()
-    if now.weekday() > 4 or not (9 <= now.hour < 16):
+    minutes = now.hour * 60 + now.minute
+    if now.weekday() > 4 or not (9 * 60 + 30 <= minutes < 16 * 60):
         block(f"outside regular market hours ({now:%a %H:%M} ET)")
 
     last = state.get("last_option_action") or {}
     if last.get("date") == str(now.date()) and last.get("order_placed"):
         block("an option order was already placed today (max 1/day)")
 
+    state["last_option_action"] = {"date": str(now.date()), "order_placed": True}
+    (ROOT / "state" / "state.json").write_text(json.dumps(state, indent=2))
+
     sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # fail closed: a crashing gate must block, never allow
+        block(f"gate error ({type(exc).__name__}: {exc})")
