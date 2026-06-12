@@ -25,7 +25,7 @@ automatically — no per-script inline metadata.
 
 ## How a run works
 
-`launchd` (com.dylan.agentic-trader, weekdays 15:45 ET) → `run.sh`
+`launchd` (com.example.agentic-trader, weekdays 15:45 ET) → `run.sh`
 (time-window + lock guard) → `claude -p` executes `TRADER.md` →
 `scripts/decide.py` computes the signal → Robinhood MCP places/reviews orders
 → journal + state + macOS notification.
@@ -64,10 +64,22 @@ automatically — no per-script inline metadata.
 - `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
 - `TRADER.md` — the exact procedure the headless session follows
 
+## Setup
+
+- Install the scheduler: `bash scripts/install-launchd.sh` — substitutes this
+  repo's path into `com.example.agentic-trader.plist`, installs it to
+  `~/Library/LaunchAgents/`, and loads it. Safe to re-run.
+- The weekday 15:45 schedule is intentional: the signal is computed at
+  ~3:45pm ET using the live price as a provisional close, so orders can fill
+  before the 4pm close. Don't change it without revisiting the strategy.
+- Migrating from an older install under a different label? Boot out the old
+  agent (`launchctl bootout gui/$UID/<old-label>`) and delete its plist from
+  `~/Library/LaunchAgents/` before installing.
+
 ## Ops
 
-- Pause: `launchctl bootout gui/$UID/com.dylan.agentic-trader`
-- Resume: `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.dylan.agentic-trader.plist`
+- Pause: `launchctl bootout gui/$UID/com.example.agentic-trader`
+- Resume: `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.example.agentic-trader.plist`
 - The Mac must be awake at 3:45pm ET; launchd fires a missed run on wake but
   `run.sh` skips it outside 15:30–15:58 ET.
 - Re-auth: if the claude.ai Robinhood connector token expires, runs will
