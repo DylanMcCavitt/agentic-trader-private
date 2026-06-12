@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["pandas", "yfinance"]
-# ///
 """Backtest Connors RSI(2) mean reversion, long-only, close-to-close fills.
 
 Rules:
