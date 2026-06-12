@@ -53,6 +53,7 @@ automatically — no per-script inline metadata.
   - `entry_rsi` — RSI(2) entry threshold
   - `scale_rsi` — RSI(2) threshold for the backtest's second tranche
   - `slippage_bps` — backtest slippage per side, in basis points
+  - every knob is documented in [docs/config.md](docs/config.md); `config.example.json` is a copyable starting point
 - `config.local.json` — untracked (gitignored) local overrides, deep-merged
   over `config.json` by the order gate and the trading run. Create it once
   with the real account: `{"account_number": "<your account number>"}`. Until
