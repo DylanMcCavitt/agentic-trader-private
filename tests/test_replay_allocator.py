@@ -3,9 +3,13 @@
 Hermetic: synthetic per-strategy book histories only (offline --books mode
 and the pure replay() function); no network, tmp_path only. The core
 guarantee under test is NO LOOKAHEAD: the champion traded on day t must be
-chosen from book values dated <= t-1, so a one-day +50% spike injected into
-a book can never be captured by the meta-portfolio on the spike day unless
-that book was already champion on prior data.
+chosen from book values dated <= t-1, so a one-day +500% spike injected
+into a book can never be captured by the meta-portfolio on the spike day
+unless that book was already champion on prior data. The spike is huge and
+the no-lookahead tests sweep several spike positions, so a genuine one-day
+lookahead (truncating to <= t instead of <= t-1) flips the Thompson
+champion to the spiked book deterministically — mutation-tested: that exact
+mutant fails these tests, independent of any single date-seeded RNG draw.
 """
 import json
 import sys
@@ -41,9 +45,12 @@ ALPHA_RETS = [0.006, 0.002] * ((N_DAYS - 1) // 2 + 1)  # mean +0.4%/day
 BETA_RETS = [-0.002, -0.006] * ((N_DAYS - 1) // 2 + 1)  # mean -0.4%/day
 
 
-def make_books(spike_at=None, spike=0.5):
+def make_books(spike_at=None, spike=5.0):
     """Dominant alpha vs poor beta; optionally a one-day +spike return is
-    injected into beta at index spike_at (the jump persists in its values)."""
+    injected into beta at index spike_at (the jump persists in its values).
+    The default spike (+500%) is big enough that any implementation with a
+    one-day lookahead flips the Thompson champion to beta on the spike day,
+    whatever the date-seeded gaussian draws happen to be."""
     beta = BETA_RETS[:N_DAYS - 1].copy()
     if spike_at is not None:
         beta[spike_at - 1] += spike  # return *into* DATES[spike_at]
@@ -135,16 +142,21 @@ def test_hold_books_are_never_candidates():
 
 # --- NO LOOKAHEAD ---------------------------------------------------------------
 
-SPIKE_AT = 60
+# several positions, so the guarantee never hinges on one date-seeded RNG
+# draw — at every one, a one-day-lookahead mutant deterministically picks
+# beta on the spike day (verified by mutation testing) while the correct
+# <= t-1 truncation keeps alpha champion
+SPIKE_POSITIONS = (25, 40, 60, 75)
 
 
-def test_no_lookahead_spike_day_pick_uses_only_prior_data():
-    spiked = make_books(spike_at=SPIKE_AT)
+@pytest.mark.parametrize("spike_at", SPIKE_POSITIONS)
+def test_no_lookahead_spike_day_pick_uses_only_prior_data(spike_at):
+    spiked = make_books(spike_at=spike_at)
     result = replay_allocator.replay(spiked)
-    spike_date = DATES[SPIKE_AT]
+    spike_date = DATES[spike_at]
     # independently recompute the pick from data strictly before the spike
     trunc = {n: {"history": [h for h in b["history"]
-                             if h["date"] <= DATES[SPIKE_AT - 1]]}
+                             if h["date"] <= DATES[spike_at - 1]]}
              for n, b in spiked.items()}
     expected = allocate.thompson_pick(trunc, spike_date)["champion"]
     got = next(p["champion"] for p in result["picks"]
@@ -154,26 +166,29 @@ def test_no_lookahead_spike_day_pick_uses_only_prior_data():
     assert got == "alpha"
 
 
-def test_no_lookahead_meta_cannot_capture_the_spike_day():
-    result = replay_allocator.replay(make_books(spike_at=SPIKE_AT))
+@pytest.mark.parametrize("spike_at", SPIKE_POSITIONS)
+def test_no_lookahead_meta_cannot_capture_the_spike_day(spike_at):
+    result = replay_allocator.replay(make_books(spike_at=spike_at))
     meta = result["meta_history"]
-    i = next(i for i, h in enumerate(meta) if h["date"] == DATES[SPIKE_AT])
+    i = next(i for i, h in enumerate(meta) if h["date"] == DATES[spike_at])
     day_ret = meta[i]["value"] / meta[i - 1]["value"] - 1
     # champion on the spike day was alpha (chosen without the spike), so the
-    # meta-return is alpha's small daily return — nowhere near +50%
-    assert day_ret == pytest.approx(ALPHA_RETS[SPIKE_AT - 1])
+    # meta-return is alpha's small daily return — nowhere near +500%
+    assert day_ret == pytest.approx(ALPHA_RETS[spike_at - 1])
     assert day_ret < 0.05
 
 
-def test_no_lookahead_picks_identical_with_and_without_spike_through_spike_day():
+@pytest.mark.parametrize("spike_at", SPIKE_POSITIONS)
+def test_no_lookahead_picks_identical_with_and_without_spike_through_spike_day(
+        spike_at):
     # data through t-1 is identical for every pick up to and including the
     # spike day, so the pick sequence must be too — the spike can only ever
     # influence picks from the *next* day on
-    with_spike = replay_allocator.replay(make_books(spike_at=SPIKE_AT))
+    with_spike = replay_allocator.replay(make_books(spike_at=spike_at))
     without = replay_allocator.replay(make_books())
-    cut = SPIKE_AT - replay_allocator.WARMUP_DAYS + 1
+    cut = spike_at - replay_allocator.WARMUP_DAYS + 1
     assert with_spike["picks"][:cut] == without["picks"][:cut]
-    assert with_spike["picks"][cut - 1]["date"] == DATES[SPIKE_AT]
+    assert with_spike["picks"][cut - 1]["date"] == DATES[spike_at]
 
 
 # --- comparison rows --------------------------------------------------------------
