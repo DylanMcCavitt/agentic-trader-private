@@ -166,6 +166,24 @@ def test_record_corrupt_history_exits_nonzero(tmp_path, monkeypatch, capsys):
     assert "unreadable allocator history" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("content", [
+    "[]",                              # valid JSON, not an object
+    "null",                            # valid JSON, not an object
+    '{"picks": "abc"}',                # picks is not a list
+    '{"picks": [{"champion": "a"}]}',  # pick entry missing "date"
+])
+def test_record_wrong_shape_history_exits_nonzero(tmp_path, monkeypatch,
+                                                  capsys, content):
+    (tmp_path / "allocator.json").write_text(content)
+    with pytest.raises(SystemExit) as exc:
+        run_allocate(monkeypatch, tmp_path, "--pick", "--record",
+                     "--date", "2026-06-12")
+    assert exc.value.code == 1
+    assert "unreadable allocator history" in capsys.readouterr().err
+    # the malformed file is left exactly as found -- never overwritten
+    assert (tmp_path / "allocator.json").read_text() == content
+
+
 def test_record_without_pick_is_usage_error(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
         run_allocate(monkeypatch, tmp_path, "--record")

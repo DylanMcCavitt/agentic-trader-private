@@ -250,7 +250,17 @@ def record_pick(result: dict, books: dict, half_life: float,
             print(f"unreadable allocator history at {path}: {exc}",
                   file=sys.stderr)
             sys.exit(1)
-        history.setdefault("picks", [])
+        # valid JSON of the wrong shape gets the same clean exit as
+        # syntactic corruption -- never an AttributeError/KeyError traceback,
+        # and never a silent overwrite of whatever is in the file
+        if not (isinstance(history, dict)
+                and isinstance(history.setdefault("picks", []), list)
+                and all(isinstance(p, dict) and "date" in p
+                        for p in history["picks"])):
+            print(f"unreadable allocator history at {path}: expected an "
+                  f"object with a list of dated picks",
+                  file=sys.stderr)
+            sys.exit(1)
     entry = pick_entry(result, books, half_life)
     status = upsert_pick(history["picks"], entry, force=force)
     if status == "skipped":
