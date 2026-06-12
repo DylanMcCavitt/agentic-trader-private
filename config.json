@@ -1,6 +1,6 @@
 {
   "symbol": "SPY",
-  "account_number": "456234764",
+  "account_number": "REPLACE_ME",
   "dry_run": true,
   "position_fraction": 0.95,
   "max_order_usd": 550,

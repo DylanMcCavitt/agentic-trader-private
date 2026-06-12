@@ -19,20 +19,56 @@ def block(msg: str) -> None:
     sys.exit(2)
 
 
+def deep_merge(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_config(root: Path = ROOT) -> dict:
+    """Tracked config.json deep-merged with untracked config.local.json."""
+    cfg = json.loads((root / "config.json").read_text())
+    local = root / "config.local.json"
+    if local.exists():
+        cfg = deep_merge(cfg, json.loads(local.read_text()))
+    return cfg
+
+
 def main() -> None:
     payload = json.load(sys.stdin)
     if not payload.get("tool_name", "").endswith("place_equity_order"):
         sys.exit(0)
 
-    cfg = json.loads((ROOT / "config.json").read_text())
-    state = json.loads((ROOT / "state" / "state.json").read_text())
+    try:
+        cfg = load_config()
+        state = json.loads((ROOT / "state" / "state.json").read_text())
+    except Exception as exc:  # fail closed: a broken config must never allow
+        block(f"cannot load config/state ({type(exc).__name__}: {exc})")
     order = payload.get("tool_input", {})
+
+    # Guardrail: the real account number lives only in untracked
+    # config.local.json. Missing file or placeholder value = hard block.
+    if not (ROOT / "config.local.json").exists():
+        block(
+            "config.local.json is missing — create it next to config.json "
+            'with {"account_number": "<real account>"}; no orders without it'
+        )
+    account = cfg.get("account_number")
+    if not account or account == "REPLACE_ME":
+        block(
+            "account_number is missing or still the REPLACE_ME placeholder — "
+            "set the real value in config.local.json"
+        )
 
     if cfg.get("dry_run"):
         block("dry_run=true in config.json — review only, no live orders")
     if state.get("halt"):
         block(f"kill switch active: {state.get('halt_reason')}")
-    if order.get("account_number") != cfg["account_number"]:
+    if order.get("account_number") != account:
         block(f"account {order.get('account_number')!r} is not the agentic account")
     if order.get("symbol") != cfg["symbol"]:
         block(f"symbol {order.get('symbol')!r} not whitelisted (only {cfg['symbol']})")

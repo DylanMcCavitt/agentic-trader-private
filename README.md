@@ -1,7 +1,7 @@
 # agentic-trader
 
-Autonomous RSI(2) mean-reversion swing trader for the Robinhood **Agentic**
-account (••••4764), executed by a scheduled headless Claude Code session via
+Autonomous RSI(2) mean-reversion swing trader for a dedicated, capped
+brokerage account, executed by a scheduled headless Claude Code session via
 Robinhood's official Agentic Trading MCP.
 
 ## Strategy (Connors RSI-2, long-only, SPY)
@@ -38,7 +38,12 @@ Robinhood's official Agentic Trading MCP.
 
 ## Files
 
-- `config.json` — symbol, account, sizing caps, dry_run flag
+- `config.json` — symbol, sizing caps, dry_run flag; `account_number` is the
+  `REPLACE_ME` placeholder
+- `config.local.json` — untracked (gitignored) local overrides, deep-merged
+  over `config.json` by the order gate and the trading run. Create it once
+  with the real account: `{"account_number": "<your account number>"}`. Until
+  it exists, the order gate hard-blocks every order.
 - `state/state.json` — high-water mark, halt flag, last action
 - `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
 - `TRADER.md` — the exact procedure the headless session follows

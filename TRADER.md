@@ -5,15 +5,19 @@ Follow these steps exactly. Do not improvise trades, symbols, or sizing. The
 strategy decision comes from `scripts/decide.py` only — never from your own
 market opinion. All numbered steps are mandatory.
 
-1. **Load context.** Read `config.json` and `state/state.json`. If `halt` is
-   true: log "halted: <reason>" to the journal (step 8), notify (step 9), stop.
+1. **Load context.** Run `python3 scripts/load_config.py` to get the effective
+   config (`config.json` deep-merged with untracked `config.local.json`, which
+   holds the real `account_number`). Use that merged config everywhere below.
+   If `account_number` is missing or `REPLACE_ME`, stop — the order gate will
+   block everything anyway. Read `state/state.json`. If `halt` is true: log
+   "halted: <reason>" to the journal (step 8), notify (step 9), stop.
 
 2. **Confirm the market is open today.** Get a SPY quote via the Robinhood MCP
    (`get_equity_quotes`). If the quote's last-trade timestamp is not from today
    (market holiday), journal "market closed", notify, stop.
 
-3. **Portfolio + kill switch.** Call `get_portfolio` for the account in
-   `config.json`. If `total_value` > state `hwm`, update `hwm` in the state
+3. **Portfolio + kill switch.** Call `get_portfolio` for the account in the
+   merged config. If `total_value` > state `hwm`, update `hwm` in the state
    file. If `total_value` < `hwm × (1 − kill_drawdown_pct/100)`: set
    `halt: true` with `halt_reason` describing the drawdown, journal it, notify
    with sound, stop. Place no orders.
@@ -56,7 +60,7 @@ market opinion. All numbered steps are mandatory.
 
 10. **Notify.** `osascript -e 'display notification "<decision + value>" with title "Agentic Trader"'`.
 
-Hard rules: trade only the symbol and account in `config.json`; at most one
+Hard rules: trade only the symbol and account in the merged config; at most one
 order per run; never use margin features; never place an order the review step
 flagged; if any MCP call errors twice in a row, journal the error, notify, and
 stop without trading.
