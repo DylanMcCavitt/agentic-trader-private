@@ -30,7 +30,8 @@ Robinhood's official Agentic Trading MCP.
 2. **`scripts/order_gate.py`** (PreToolUse hook, deterministic): blocks any
    order when `dry_run` or `halt` is set, wrong account/symbol, buys not
    market+dollar-sized, size > `max_order_usd`, outside market hours, or a
-   second order in one day.
+   second order in one day. Fails closed: a missing or unparsable
+   `config.json` or `state/state.json` blocks the order outright (exit 2).
 3. **Kill switch**: portfolio value 15% below high-water mark → `halt: true`,
    no further trading until manually reset in `state/state.json`.
 4. **`dry_run: true`** in `config.json` — orders are reviewed and journaled
@@ -44,7 +45,10 @@ Robinhood's official Agentic Trading MCP.
   over `config.json` by the order gate and the trading run. Create it once
   with the real account: `{"account_number": "<your account number>"}`. Until
   it exists, the order gate hard-blocks every order.
-- `state/state.json` — high-water mark, halt flag, last action
+- `state/state.json` — untracked (gitignored) live state: high-water mark,
+  halt flag, last action. First-run bootstrap: copy the tracked example,
+  `cp state/state.example.json state/state.json`. Until it exists, the order
+  gate blocks every order (fail closed).
 - `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
 - `TRADER.md` — the exact procedure the headless session follows
 
