@@ -26,6 +26,16 @@ day's champion. Weights are rank-normalized over the draws (Borda: best of
 n gets n/(n(n+1)/2), worst gets 1/(n(n+1)/2)) — draws live on a ~1e-3 daily
 return scale where a raw softmax would be indistinguishable from uniform.
 
+Switch hysteresis (issue #41): the daily re-pick is incumbent-aware. The
+previous recorded champion (the last entry in state/allocator.json dated
+before the pick date) stays champion unless a challenger's draw exceeds
+the incumbent's draw by HYSTERESIS incumbent posterior stds (--hysteresis
+overrides). No incumbent, an incumbent that left the fleet, or an
+insufficient-data incumbent = plain highest-draw behavior, so cold starts
+and stale incumbents are never protected. Draws, weights, determinism and
+the date-seeded scheme are unchanged — hysteresis only gates which row is
+crowned champion.
+
 Allocator slice 3 (--record, composes with --pick): verdict persistence.
 The day's pick (date, champion, per-strategy weights and decayed-Sharpe
 scores) is appended to an untracked history at state/allocator.json so
@@ -57,6 +67,14 @@ STD_FLOOR = 1e-12      # below this, std is float noise — treat as flat book
 PRIOR_STD = 0.01       # diffuse prior std on daily mean return (1%/day) for
                        # insufficient-data books — wide enough to win draws
                        # occasionally, narrow enough not to dominate
+HYSTERESIS = 3.0       # switch hysteresis: an incumbent champion is only
+                       # displaced when a challenger's draw beats the
+                       # incumbent's draw by this many incumbent posterior
+                       # stds. Scale-aware on purpose — draws live on a ~1e-3
+                       # daily-return scale, so a raw constant margin would be
+                       # meaningless across books. 0 = slice-2 behavior.
+                       # Default set by the 2026-06-12 replay sweep recorded
+                       # in docs/strategies.md ("Switch hysteresis").
 
 
 # --- pure scoring functions (reused by allocator slices 2-4) -----------------
@@ -157,9 +175,18 @@ def pick_seed(date_key: str, seed: int = 0) -> str:
 def thompson_pick(books: dict, date_key: str, seed: int = 0,
                   half_life: float = HALF_LIFE_DAYS,
                   min_returns: int = MIN_RETURNS,
-                  prior_std: float = PRIOR_STD) -> dict:
+                  prior_std: float = PRIOR_STD,
+                  incumbent: str | None = None,
+                  hysteresis: float = HYSTERESIS) -> dict:
     """One Thompson-sampling round over all books: one gaussian draw per
-    strategy from its posterior; highest draw is the champion.
+    strategy from its posterior; highest draw is the champion, except that
+    a scored incumbent (yesterday's champion) is retained unless the top
+    challenger's draw exceeds the incumbent's draw by
+    hysteresis * incumbent_posterior_std — a scale-aware switching margin.
+    incumbent=None (no history), an incumbent missing from books, an
+    insufficient-data incumbent, or hysteresis=0 all reduce to the plain
+    highest-draw pick (exact draw ties are measure-zero for gaussian
+    draws). Draws and weights are never altered by hysteresis.
 
     Determinism: each strategy's RNG is random.Random(f"{base}:{name}") —
     a string seed (stdlib hashes it with sha512, immune to PYTHONHASHSEED)
@@ -184,8 +211,14 @@ def thompson_pick(books: dict, date_key: str, seed: int = 0,
     n = len(rows)
     for i, r in enumerate(rows):
         r["weight"] = (n - i) / (n * (n + 1) / 2)
+    champion = rows[0]["strategy"] if rows else None
+    inc = next((r for r in rows if r["strategy"] == incumbent), None)
+    if (inc is not None and not inc["insufficient"] and champion != incumbent
+            and rows[0]["draw"] <= inc["draw"] + hysteresis * inc["post_std"]):
+        champion = incumbent
     return {"date": date_key, "seed": seed,
-            "champion": rows[0]["strategy"] if rows else None,
+            "incumbent": incumbent, "hysteresis": hysteresis,
+            "champion": champion,
             "rows": rows}
 
 
@@ -199,6 +232,8 @@ def pick_entry(result: dict, books: dict,
     insufficient-data books)."""
     return {"date": result["date"], "seed": result["seed"],
             "half_life_days": half_life,
+            "hysteresis": result["hysteresis"],
+            "incumbent": result["incumbent"],
             "champion": result["champion"],
             "weights": {r["strategy"]: round(r["weight"], 6)
                         for r in result["rows"]},
@@ -229,6 +264,32 @@ def verdict_line(entry: dict) -> str:
     weight = entry["weights"][entry["champion"]]
     return (f"champion today: {entry['champion']} "
             f"(score {score_s}, weight {weight:.4f})")
+
+
+def last_recorded_champion(pick_date: str, path=None) -> str | None:
+    """Incumbent for switch hysteresis: the champion of the most recent
+    recorded pick dated strictly before pick_date (so a --force re-record
+    of a date is never its own incumbent). Returns None when the history
+    is missing, unreadable, or has no earlier pick — cold starts get the
+    plain highest-draw behavior. Read-only and deliberately lenient: a
+    corrupt history must not block a recommend-only --pick (--record
+    still refuses to write over corruption, in record_pick)."""
+    path = path if path is not None else ALLOC_PATH
+    if not path.exists():
+        return None
+    try:
+        history = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    picks = history.get("picks") if isinstance(history, dict) else None
+    if not isinstance(picks, list):
+        return None
+    prior = [p for p in picks
+             if isinstance(p, dict) and isinstance(p.get("date"), str)
+             and p["date"] < pick_date]
+    if not prior:
+        return None
+    return max(prior, key=lambda p: p["date"]).get("champion")
 
 
 def record_pick(result: dict, books: dict, half_life: float,
@@ -292,6 +353,8 @@ def print_pick(result: dict, state: dict, args, record=None) -> None:
                "date": result["date"], "seed": result["seed"],
                "half_life_days": args.half_life,
                "prior_std": PRIOR_STD,
+               "hysteresis": result["hysteresis"],
+               "incumbent": result["incumbent"],
                "champion": result["champion"],
                "rows": rows}
         if record is not None:
@@ -304,8 +367,14 @@ def print_pick(result: dict, state: dict, args, record=None) -> None:
             print("nothing recorded")
         return
     print(f"thompson pick for {result['date']} (seed offset {result['seed']}, "
-          f"half-life {args.half_life:g}d)")
-    print(f"champion: {result['champion']}\n")
+          f"half-life {args.half_life:g}d, hysteresis {result['hysteresis']:g})")
+    if (result["champion"] == result["incumbent"]
+            and result["rows"] and result["champion"]
+            != result["rows"][0]["strategy"]):
+        print(f"champion: {result['champion']} (incumbent retained: top draw "
+              f"{result['rows'][0]['strategy']} within hysteresis margin)\n")
+    else:
+        print(f"champion: {result['champion']}\n")
     header = (f"{'#':>2} {'strategy':<24} {'draw':>10} {'weight':>7} "
               f"{'post_mu':>10} {'post_sd':>10} {'days':>4}  note")
     print(header)
@@ -337,6 +406,10 @@ def main() -> None:
                     help="pick date for RNG seeding (default: today; --pick only)")
     ap.add_argument("--seed", type=int, default=0,
                     help="seed offset added to the date seed (--pick only)")
+    ap.add_argument("--hysteresis", type=float, default=None,
+                    help="switch-hysteresis margin in incumbent posterior "
+                         f"stds (default {HYSTERESIS:g}; 0 disables; "
+                         "--pick only)")
     ap.add_argument("--record", action="store_true",
                     help="persist the pick to state/allocator.json (--pick only)")
     ap.add_argument("--force", action="store_true",
@@ -345,8 +418,11 @@ def main() -> None:
     args = ap.parse_args()
     if args.half_life <= 0:
         ap.error(f"--half-life must be > 0, got {args.half_life:g}")
-    if (args.date is not None or args.seed != 0) and not args.pick:
-        ap.error("--date/--seed only apply with --pick")
+    if ((args.date is not None or args.seed != 0
+         or args.hysteresis is not None) and not args.pick):
+        ap.error("--date/--seed/--hysteresis only apply with --pick")
+    if args.hysteresis is not None and args.hysteresis < 0:
+        ap.error(f"--hysteresis must be >= 0, got {args.hysteresis:g}")
     if args.record and not args.pick:
         ap.error("--record only applies with --pick")
     if args.force and not args.record:
@@ -374,8 +450,11 @@ def main() -> None:
         sys.exit(1)
 
     if args.pick:
+        hysteresis = args.hysteresis if args.hysteresis is not None else HYSTERESIS
+        incumbent = last_recorded_champion(pick_date)
         result = thompson_pick(state.get("books", {}), pick_date,
-                               seed=args.seed, half_life=args.half_life)
+                               seed=args.seed, half_life=args.half_life,
+                               incumbent=incumbent, hysteresis=hysteresis)
         record = (record_pick(result, state.get("books", {}), args.half_life,
                               force=args.force) if args.record else None)
         print_pick(result, state, args, record)

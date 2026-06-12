@@ -12,6 +12,7 @@ champion to the spiked book deterministically — mutation-tested: that exact
 mutant fails these tests, independent of any single date-seeded RNG draw.
 """
 import json
+import random
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -75,10 +76,28 @@ def test_replay_picks_daily_after_warmup():
 
 def test_replay_pick_matches_allocate_scheme_on_truncated_data():
     # the pick for day t must equal allocate.thompson_pick over histories
-    # truncated to <= t-1, RNG-keyed by day t — the slice-2 scheme exactly
+    # truncated to <= t-1, RNG-keyed by day t — the slice-2 scheme exactly,
+    # with yesterday's champion threaded as the hysteresis incumbent (None
+    # for the first pick after warmup)
     books = make_books()
     result = replay_allocator.replay(books)
+    by_date = {p["date"]: p["champion"] for p in result["picks"]}
     for idx in (replay_allocator.WARMUP_DAYS, 40, N_DAYS - 1):
+        day = DATES[idx]
+        trunc = {n: {"history": [h for h in b["history"]
+                                 if h["date"] <= DATES[idx - 1]]}
+                 for n, b in books.items()}
+        expected = allocate.thompson_pick(
+            trunc, day, incumbent=by_date.get(DATES[idx - 1]))["champion"]
+        assert by_date[day] == expected
+
+
+def test_replay_hysteresis_zero_matches_plain_slice2_picks():
+    # --hysteresis 0 must reproduce the original incumbent-free replay
+    books = make_books()
+    result = replay_allocator.replay(books, hysteresis=0.0)
+    assert result["hysteresis"] == 0.0
+    for idx in (replay_allocator.WARMUP_DAYS, 30, 55, N_DAYS - 1):
         day = DATES[idx]
         trunc = {n: {"history": [h for h in b["history"]
                                  if h["date"] <= DATES[idx - 1]]}
@@ -86,6 +105,28 @@ def test_replay_pick_matches_allocate_scheme_on_truncated_data():
         expected = allocate.thompson_pick(trunc, day)["champion"]
         got = next(p["champion"] for p in result["picks"] if p["date"] == day)
         assert got == expected
+
+
+def noisy_books(n_strats=4, n_days=160, seed=7):
+    """Several similar noisy books — leadership is ambiguous, so the plain
+    h=0 allocator switches often; raising hysteresis must damp that."""
+    rng = random.Random(seed)
+    dates = iso_days(n_days)
+    return {f"s{k}": {"history": hist_from_returns(
+                [rng.gauss(0.0005, 0.01) for _ in range(n_days - 1)], dates)}
+            for k in range(n_strats)}
+
+
+def test_replay_switches_decrease_with_hysteresis_without_freezing():
+    books = noisy_books()
+    sw = {h: replay_allocator.replay(books, hysteresis=h)["switches"]
+          for h in (0.0, 1.0, 3.0)}
+    assert sw[0.0] > 0                      # fixture actually switches at h=0
+    assert sw[0.0] >= sw[1.0] >= sw[3.0]    # monotonic-ish damping
+    assert sw[3.0] < sw[0.0]                # strictly fewer at high margin
+    # sanity: hysteresis damps switching, it must not freeze the champion
+    # forever on an ambiguous-leadership fixture
+    assert sw[1.0] > 0
 
 
 def test_replay_dominant_strategy_is_held_and_meta_compounds_it():
@@ -154,11 +195,16 @@ def test_no_lookahead_spike_day_pick_uses_only_prior_data(spike_at):
     spiked = make_books(spike_at=spike_at)
     result = replay_allocator.replay(spiked)
     spike_date = DATES[spike_at]
-    # independently recompute the pick from data strictly before the spike
+    # independently recompute the pick from data strictly before the spike,
+    # with the prior day's replay champion as the hysteresis incumbent —
+    # the incumbent is itself prior information (picked on data <= t-2)
     trunc = {n: {"history": [h for h in b["history"]
                              if h["date"] <= DATES[spike_at - 1]]}
              for n, b in spiked.items()}
-    expected = allocate.thompson_pick(trunc, spike_date)["champion"]
+    incumbent = next(p["champion"] for p in result["picks"]
+                     if p["date"] == DATES[spike_at - 1])
+    expected = allocate.thompson_pick(trunc, spike_date,
+                                      incumbent=incumbent)["champion"]
     got = next(p["champion"] for p in result["picks"]
                if p["date"] == spike_date)
     assert got == expected
@@ -301,6 +347,16 @@ def test_main_seed_passthrough_changes_json(tmp_path, monkeypatch, capsys):
     assert out["seed"] == 7
 
 
+def test_main_hysteresis_passthrough_and_default(tmp_path, monkeypatch,
+                                                 capsys):
+    p = write_books(tmp_path)
+    run_main(monkeypatch, "--books", str(p), "--json")
+    assert (json.loads(capsys.readouterr().out)["hysteresis"]
+            == allocate.HYSTERESIS)
+    run_main(monkeypatch, "--books", str(p), "--json", "--hysteresis", "1.5")
+    assert json.loads(capsys.readouterr().out)["hysteresis"] == 1.5
+
+
 def test_main_table_output_shape(tmp_path, monkeypatch, capsys):
     p = write_books(tmp_path)
     run_main(monkeypatch, "--books", str(p))
@@ -351,6 +407,7 @@ def test_main_not_enough_history_exits_nonzero(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize("argv", [("--half-life", "0"),
                                   ("--half-life", "-5"),
                                   ("--warmup", "0"),
+                                  ("--hysteresis", "-1"),
                                   ("--start", "20250101"),
                                   ("--end", "2025-13-01")])
 def test_main_bad_flags_are_usage_errors(tmp_path, monkeypatch, capsys, argv):
