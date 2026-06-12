@@ -85,6 +85,47 @@ The example is strict JSON (no comments); this file is the commentary.
   full SPY backtest's worst drawdown is about 15%.
 - **Default**: `15`.
 
+### `max_option_premium_usd`
+
+- **Purpose**: hard cap on the total premium (price × quantity × 100) of any
+  single option buy-to-open. Enforced mechanically by
+  `scripts/option_gate.py`; if the key is missing the gate blocks all option
+  orders (options trading "not enabled").
+- **Units**: US dollars.
+- **Safe range**: small relative to the dedicated account's funding — a long
+  option's premium is its max loss.
+- **Default**: `1500`.
+
+### `max_option_contracts`
+
+- **Purpose**: hard cap on contracts per option order, enforced by
+  `scripts/option_gate.py`. Missing key blocks all option orders.
+- **Units**: contracts.
+- **Safe range**: `1`–`5` for a small account.
+- **Default**: `2`.
+
+### `paper`
+
+- **Purpose**: paper-fleet simulation knobs for
+  `scripts/run_strategies.py` — `starting_cash` per book,
+  `position_fraction` and `slippage_bps` for equity fills, `option_alloc`
+  (fraction of book cash spent per option entry) and `option_spread_take`
+  (fraction of the half-spread paid on option fills; `0` fills at mid, `1`
+  at bid/ask).
+- **Safe range**: paper money — affects comparison realism, not real risk.
+  Keep `slippage_bps`/`option_spread_take` non-zero or results flatter.
+- **Default**: `{"starting_cash": 10000, "position_fraction": 0.95,
+  "slippage_bps": 2.0, "option_alloc": 0.35, "option_spread_take": 0.25}`.
+
+### `strategies`
+
+- **Purpose**: the paper fleet — one entry per strategy:
+  `{enabled, kind, symbol(s), signal, right?, params}`. Evaluated by
+  `scripts/run_strategies.py` only; the live trading path (decide.py + the
+  order gates) does not read it. See
+  [strategies.md](strategies.md) for every strategy and its params.
+- **Default**: 5 equity + 5 options strategies, all enabled.
+
 ### `entry_rsi`
 
 - **Purpose**: entry threshold. Buy only when `RSI(2) < entry_rsi` and the

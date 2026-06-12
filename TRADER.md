@@ -48,19 +48,28 @@ market opinion. All numbered steps are mandatory.
 7. **Verify fills.** If an order was placed, wait ~10s, then `get_equity_orders`
    (filter to today, symbol SPY) and record the fill state.
 
-8. **Journal.** Append one entry to `logs/journal.md`:
+8. **Paper fleet update.** Get quotes for SPY, QQQ, and IWM in one
+   `get_equity_quotes` call, then run:
+   `uv run scripts/run_strategies.py --quotes '{"SPY": <px>, "QQQ": <px>, "IWM": <px>}'`
+   This updates every paper strategy book in `state/paper.json` and appends to
+   `logs/paper.md` on its own — do not edit those files yourself. It places no
+   real orders. If it errors, journal the error text and continue; the paper
+   fleet must never block the live run. Include each strategy's `action` and
+   `value` from its JSON output in the journal entry (one line per strategy).
+
+9. **Journal.** Append one entry to `logs/journal.md`:
    date/time ET, portfolio value, signal JSON, action taken (or DRY-RUN/blocked
    reason), order id + fill state if any. When describing a dollar-sized order,
    always write it as notional with the share estimate and quote, e.g.
    "BUY $510.43 notional of SPY (~0.70 sh at $727.08), market order" — never
    "BUY SPY market $510.43", which reads like a limit price.
 
-9. **Update state.** Write `state/state.json`: `last_run` (ISO timestamp),
-   `last_action` `{date, decision, order_placed: bool, order_id}`, and
-   `position_opened` (set to today's date on a fill of a buy; null after a
-   sell fills; otherwise leave unchanged).
+10. **Update state.** Write `state/state.json`: `last_run` (ISO timestamp),
+    `last_action` `{date, decision, order_placed: bool, order_id}`, and
+    `position_opened` (set to today's date on a fill of a buy; null after a
+    sell fills; otherwise leave unchanged).
 
-10. **Notify.** `osascript -e 'display notification "<decision + value>" with title "Agentic Trader"'`.
+11. **Notify.** `osascript -e 'display notification "<decision + value>" with title "Agentic Trader"'`.
 
 Hard rules: trade only the symbol and account in the merged config; at most one
 order per run; never use margin features; never place an order the review step

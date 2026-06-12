@@ -64,8 +64,9 @@ account's funding is the hard loss cap.
 The headline of this repo is its [`.claude/settings.json`](.claude/settings.json),
 published as-is. It wires the harness:
 
-- **PreToolUse hook**: matcher `mcp__.*place_equity_order` runs
-  `scripts/order_gate.py` before any order placement reaches the broker.
+- **PreToolUse hooks**: matcher `mcp__.*place_equity_order` runs
+  `scripts/order_gate.py`, and `mcp__.*place_option_order` runs
+  `scripts/option_gate.py`, before any order placement reaches the broker.
 - **Allow/deny permissions**: the session may read the repo, write only
   `state/**` and `logs/**`, and run a short whitelist of commands
   (`uv run`, `osascript`, `uuidgen`, `date`, `sleep`) plus the Robinhood MCP.
@@ -90,6 +91,23 @@ long-only. Swap in any strategy that honors the same contract and nothing
 else in the harness changes — the guardrails apply regardless of what
 produces the signal. Full rules, parameters, and backtest methodology:
 [`docs/strategy.md`](docs/strategy.md).
+
+### The paper fleet
+
+Alongside the live strategy, every run forward-tests a fleet of 10
+candidate strategies — 5 equity, 5 single-leg options — each in its own
+$10k paper book (`scripts/run_strategies.py` → `state/paper.json` +
+`logs/paper.md`). The fleet never places real orders; it exists so dry-run
+weeks compare ten candidates instead of validating one. Rank them with
+`uv run scripts/scoreboard.py`. Full lineup and promotion path:
+[`docs/strategies.md`](docs/strategies.md).
+
+Options orders have their own deterministic PreToolUse gate
+(`scripts/option_gate.py`, wired to `place_option_order`): long-only —
+buy-to-open / sell-to-close, never short premium — limit-only opens, a hard
+premium cap (`max_option_premium_usd`), a contract cap, one option order
+per day, and the same dry-run/halt/account/fail-closed rules as the equity
+gate.
 
 Honest framing, kept on purpose: the backtest does **not** beat buy-and-hold
 (SPY 1993–2026: 4.9% CAGR vs 10.8% for buy-and-hold). Its appeal is high
@@ -119,9 +137,14 @@ automatically.
 - [`.claude/settings.json`](.claude/settings.json) — hook wiring + permissions
   (see above)
 - `TRADER.md` — the exact procedure the headless session follows
-- `scripts/order_gate.py` — the deterministic order gate (PreToolUse hook)
+- `scripts/order_gate.py` / `scripts/option_gate.py` — the deterministic
+  order gates (PreToolUse hooks) for equity and option orders
 - `scripts/decide.py` — the decision interface implementation
 - `scripts/backtest.py` — backtest harness (same indicator math as decide.py)
+- `scripts/run_strategies.py` — the paper fleet: evaluates all 10 candidate
+  strategies into per-strategy paper books (`state/paper.json`,
+  `logs/paper.md`); `scripts/scoreboard.py` ranks them —
+  see [`docs/strategies.md`](docs/strategies.md)
 - `config.json` — symbol, sizing caps, dry_run flag, and shared strategy
   params; `config.local.json` (untracked) deep-merges over it and holds the
   real account number — see [`docs/config.md`](docs/config.md) for the full
