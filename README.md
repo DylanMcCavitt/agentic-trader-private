@@ -47,8 +47,12 @@ automatically — no per-script inline metadata.
 ## Files
 
 - `pyproject.toml` / `uv.lock` — pinned dependencies (uv-managed)
-- `config.json` — symbol, sizing caps, dry_run flag; `account_number` is the
+- `config.json` — symbol, sizing caps, dry_run flag, and shared strategy
+  params read by both `decide.py` and `backtest.py`; `account_number` is the
   `REPLACE_ME` placeholder
+  - `entry_rsi` — RSI(2) entry threshold
+  - `scale_rsi` — RSI(2) threshold for the backtest's second tranche
+  - `slippage_bps` — backtest slippage per side, in basis points
 - `config.local.json` — untracked (gitignored) local overrides, deep-merged
   over `config.json` by the order gate and the trading run. Create it once
   with the real account: `{"account_number": "<your account number>"}`. Until

@@ -6,6 +6,8 @@
   "max_order_usd": 550,
   "kill_drawdown_pct": 15,
   "entry_rsi": 10.0,
+  "scale_rsi": 5.0,
+  "slippage_bps": 2.0,
   "sma_trend": 200,
   "sma_exit": 5
 }
