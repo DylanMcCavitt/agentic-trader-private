@@ -18,3 +18,13 @@ SIGNALS = {
     "rsi2_short": signals.rsi2_short,
     "donchian_short": signals.donchian_short,
 }
+
+# Vectorized twins of SIGNALS, used by scripts/backtest_fleet.py.
+SIGNAL_SERIES = {
+    "rsi2_long": signals.rsi2_long_series,
+    "ibs_long": signals.ibs_long_series,
+    "bollinger_long": signals.bollinger_long_series,
+    "donchian_long": signals.donchian_long_series,
+    "rsi2_short": signals.rsi2_short_series,
+    "donchian_short": signals.donchian_short_series,
+}

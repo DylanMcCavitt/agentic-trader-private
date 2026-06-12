@@ -66,6 +66,26 @@ Mean-reversion entries (RSI(2)/IBS) resolve in 1–5 days, so they pay very
 little theta. The honest caveat: IV is usually elevated exactly when those
 entries fire, which is why the calls are bought deep in the money.
 
+## Backtesting the fleet
+
+```bash
+uv run scripts/backtest_fleet.py                  # 2005 -> today
+uv run scripts/backtest_fleet.py --start 2015-01-01
+```
+
+Replays the exact vectorized signals through the same fill math as the
+paper engine (`scripts/paper.py`), one $10k book per strategy, with
+buy-and-hold rows for context. Equity rows are as trustworthy as
+`scripts/backtest.py`; **options rows are an approximation** — synthetic
+contracts at the configured moneyness/DTE, Black-Scholes priced from 21d
+EWMA realized vol × `--iv-premium` (default 1.15), `--opt-slip-pct`
+(default 1.5%) per side. No real IV surface means vol-crush after
+mean-reversion entries is underestimated, so treat options results as
+optimistic direction, not truth. Chain-accurate options backtesting needs
+historical chain data (e.g. QuantConnect/LEAN).
+
+Indicators warm up on data before `--start`; trading begins at `--start`.
+
 ## Promotion path
 
 1. Let the fleet run dry for several weeks; watch `scripts/scoreboard.py`.

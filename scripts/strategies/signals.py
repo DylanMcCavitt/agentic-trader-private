@@ -1,133 +1,166 @@
 """Signal functions for the strategy fleet.
 
-Contract: signal(df, p) -> dict with
-  entry   bool — open (or add) exposure today
-  exit    bool — close exposure today
-  reason  str  — human-readable explanation of whichever side fired (or didn't)
-  metrics dict — the indicator values behind the call, for the journal
+Two layers, one source of truth:
 
-df is a daily OHLC frame whose last row is today's provisional bar
-(live/last price patched in as the close). Both entry and exit are always
-computed; the engine picks the side that applies given the current position.
+- *_series(df, p) -> {"entry": bool Series, "exit": bool Series, "ind": {...}}
+  vectorized over the whole frame — used by scripts/backtest_fleet.py.
+- the scalar functions (registered in SIGNALS) take the last row of the
+  series version and add a human-readable reason — used by the live paper
+  engine (scripts/run_strategies.py).
+
+df is a daily OHLC frame; for the live path its last row is today's
+provisional bar (live/last price patched in as the close). NaN indicator
+values (warm-up window) compare False, so neither side fires.
 """
 import pandas as pd
 
 from .common import ibs, rsi, sma
 
 
-def rsi2_long(df: pd.DataFrame, p: dict) -> dict:
-    px = df["Close"]
-    close = float(px.iloc[-1])
-    trend = float(sma(px, p["sma_trend"]).iloc[-1])
-    exit_ma = float(sma(px, p["sma_exit"]).iloc[-1])
-    r2 = float(rsi(px, 2).iloc[-1])
-    entry = close > trend and r2 < p["entry_rsi"]
-    exit_ = close > exit_ma
+def _last(series_out: dict) -> dict:
     return {
-        "entry": entry, "exit": exit_,
-        "reason": (f"close {close:.2f} vs SMA{p['sma_trend']} {trend:.2f}, "
-                   f"RSI2 {r2:.1f} (entry < {p['entry_rsi']}), "
-                   f"exit SMA{p['sma_exit']} {exit_ma:.2f}"),
-        "metrics": {"close": round(close, 2), "rsi2": round(r2, 2),
-                    "sma_trend": round(trend, 2), "sma_exit": round(exit_ma, 2)},
+        "entry": bool(series_out["entry"].iloc[-1]),
+        "exit": bool(series_out["exit"].iloc[-1]),
+        "metrics": {k: round(float(v.iloc[-1]), 2) for k, v in series_out["ind"].items()},
     }
+
+
+def rsi2_long_series(df: pd.DataFrame, p: dict) -> dict:
+    px = df["Close"]
+    trend = sma(px, p["sma_trend"])
+    exit_ma = sma(px, p["sma_exit"])
+    r2 = rsi(px, 2)
+    return {"entry": (px > trend) & (r2 < p["entry_rsi"]),
+            "exit": px > exit_ma,
+            "ind": {"close": px, "rsi2": r2, "sma_trend": trend, "sma_exit": exit_ma}}
+
+
+def rsi2_long(df: pd.DataFrame, p: dict) -> dict:
+    out = _last(rsi2_long_series(df, p))
+    m = out["metrics"]
+    out["reason"] = (f"close {m['close']:.2f} vs SMA{p['sma_trend']} {m['sma_trend']:.2f}, "
+                     f"RSI2 {m['rsi2']:.1f} (entry < {p['entry_rsi']}), "
+                     f"exit SMA{p['sma_exit']} {m['sma_exit']:.2f}")
+    return out
+
+
+def rsi2_short_series(df: pd.DataFrame, p: dict) -> dict:
+    """Bearish mean reversion: overbought rallies inside a downtrend."""
+    px = df["Close"]
+    trend = sma(px, p["sma_trend"])
+    r2 = rsi(px, 2)
+    return {"entry": (px < trend) & (r2 > p["entry_rsi"]),
+            "exit": r2 < p["exit_rsi"],
+            "ind": {"close": px, "rsi2": r2, "sma_trend": trend}}
 
 
 def rsi2_short(df: pd.DataFrame, p: dict) -> dict:
-    """Bearish mean reversion: overbought rallies inside a downtrend."""
+    out = _last(rsi2_short_series(df, p))
+    m = out["metrics"]
+    out["reason"] = (f"close {m['close']:.2f} vs SMA{p['sma_trend']} {m['sma_trend']:.2f}, "
+                     f"RSI2 {m['rsi2']:.1f} (entry > {p['entry_rsi']}, "
+                     f"exit < {p['exit_rsi']})")
+    return out
+
+
+def ibs_long_series(df: pd.DataFrame, p: dict) -> dict:
     px = df["Close"]
-    close = float(px.iloc[-1])
-    trend = float(sma(px, p["sma_trend"]).iloc[-1])
-    r2 = float(rsi(px, 2).iloc[-1])
-    entry = close < trend and r2 > p["entry_rsi"]
-    exit_ = r2 < p["exit_rsi"]
-    return {
-        "entry": entry, "exit": exit_,
-        "reason": (f"close {close:.2f} vs SMA{p['sma_trend']} {trend:.2f}, "
-                   f"RSI2 {r2:.1f} (entry > {p['entry_rsi']}, exit < {p['exit_rsi']})"),
-        "metrics": {"close": round(close, 2), "rsi2": round(r2, 2),
-                    "sma_trend": round(trend, 2)},
-    }
+    trend = sma(px, p["sma_trend"])
+    exit_ma = sma(px, p["sma_exit"])
+    bar = ibs(df)
+    return {"entry": (px > trend) & (bar < p["entry_ibs"]),
+            "exit": (bar > p["exit_ibs"]) | (px > exit_ma),
+            "ind": {"close": px, "ibs": bar, "sma_trend": trend, "sma_exit": exit_ma}}
 
 
 def ibs_long(df: pd.DataFrame, p: dict) -> dict:
+    out = _last(ibs_long_series(df, p))
+    m = out["metrics"]
+    out["reason"] = (f"IBS {m['ibs']:.2f} (entry < {p['entry_ibs']}, "
+                     f"exit > {p['exit_ibs']}), close {m['close']:.2f} vs "
+                     f"SMA{p['sma_trend']} {m['sma_trend']:.2f}")
+    return out
+
+
+def bollinger_long_series(df: pd.DataFrame, p: dict) -> dict:
     px = df["Close"]
-    close = float(px.iloc[-1])
-    trend = float(sma(px, p["sma_trend"]).iloc[-1])
-    exit_ma = float(sma(px, p["sma_exit"]).iloc[-1])
-    bar = float(ibs(df).iloc[-1])
-    entry = close > trend and bar < p["entry_ibs"]
-    exit_ = bar > p["exit_ibs"] or close > exit_ma
-    return {
-        "entry": entry, "exit": exit_,
-        "reason": (f"IBS {bar:.2f} (entry < {p['entry_ibs']}, exit > {p['exit_ibs']}), "
-                   f"close {close:.2f} vs SMA{p['sma_trend']} {trend:.2f}"),
-        "metrics": {"close": round(close, 2), "ibs": round(bar, 2),
-                    "sma_trend": round(trend, 2), "sma_exit": round(exit_ma, 2)},
-    }
+    trend = sma(px, p["sma_trend"])
+    mid = sma(px, p["bb_len"])
+    lower = mid - p["bb_std"] * px.rolling(p["bb_len"]).std()
+    return {"entry": (px > trend) & (px < lower),
+            "exit": px >= mid,
+            "ind": {"close": px, "bb_lower": lower, "bb_mid": mid, "sma_trend": trend}}
 
 
 def bollinger_long(df: pd.DataFrame, p: dict) -> dict:
+    out = _last(bollinger_long_series(df, p))
+    m = out["metrics"]
+    out["reason"] = (f"close {m['close']:.2f} vs lower band {m['bb_lower']:.2f} / "
+                     f"mid {m['bb_mid']:.2f} (BB{p['bb_len']},{p['bb_std']}σ), "
+                     f"SMA{p['sma_trend']} {m['sma_trend']:.2f}")
+    return out
+
+
+def donchian_long_series(df: pd.DataFrame, p: dict) -> dict:
+    """Breakout over the prior N-day high; exit under the prior M-day low.
+    shift(1) keeps today's bar out of its own channel."""
     px = df["Close"]
-    close = float(px.iloc[-1])
-    trend = float(sma(px, p["sma_trend"]).iloc[-1])
-    mid = float(sma(px, p["bb_len"]).iloc[-1])
-    sd = float(px.rolling(p["bb_len"]).std().iloc[-1])
-    lower = mid - p["bb_std"] * sd
-    entry = close > trend and close < lower
-    exit_ = close >= mid
-    return {
-        "entry": entry, "exit": exit_,
-        "reason": (f"close {close:.2f} vs lower band {lower:.2f} / mid {mid:.2f} "
-                   f"(BB{p['bb_len']},{p['bb_std']}σ), SMA{p['sma_trend']} {trend:.2f}"),
-        "metrics": {"close": round(close, 2), "bb_lower": round(lower, 2),
-                    "bb_mid": round(mid, 2), "sma_trend": round(trend, 2)},
-    }
+    hi = df["High"].shift(1).rolling(p["entry_high"]).max()
+    lo = df["Low"].shift(1).rolling(p["exit_low"]).min()
+    return {"entry": px > hi, "exit": px < lo,
+            "ind": {"close": px, "channel_high": hi, "channel_low": lo}}
 
 
 def donchian_long(df: pd.DataFrame, p: dict) -> dict:
-    """Breakout over the prior N-day high; exit under the prior M-day low.
-    Channels exclude today's bar so the breakout compares against the past."""
-    close = float(df["Close"].iloc[-1])
-    hi = float(df["High"].iloc[:-1].rolling(p["entry_high"]).max().iloc[-1])
-    lo = float(df["Low"].iloc[:-1].rolling(p["exit_low"]).min().iloc[-1])
-    return {
-        "entry": close > hi, "exit": close < lo,
-        "reason": (f"close {close:.2f} vs {p['entry_high']}d high {hi:.2f} / "
-                   f"{p['exit_low']}d low {lo:.2f}"),
-        "metrics": {"close": round(close, 2), "channel_high": round(hi, 2),
-                    "channel_low": round(lo, 2)},
-    }
+    out = _last(donchian_long_series(df, p))
+    m = out["metrics"]
+    out["reason"] = (f"close {m['close']:.2f} vs {p['entry_high']}d high "
+                     f"{m['channel_high']:.2f} / {p['exit_low']}d low "
+                     f"{m['channel_low']:.2f}")
+    return out
 
 
-def donchian_short(df: pd.DataFrame, p: dict) -> dict:
+def donchian_short_series(df: pd.DataFrame, p: dict) -> dict:
     """Breakdown under the prior N-day low while below trend; exit over the
     prior M-day high."""
     px = df["Close"]
-    close = float(px.iloc[-1])
-    trend = float(sma(px, p["sma_trend"]).iloc[-1])
-    lo = float(df["Low"].iloc[:-1].rolling(p["entry_low"]).min().iloc[-1])
-    hi = float(df["High"].iloc[:-1].rolling(p["exit_high"]).max().iloc[-1])
-    return {
-        "entry": close < lo and close < trend, "exit": close > hi,
-        "reason": (f"close {close:.2f} vs {p['entry_low']}d low {lo:.2f} / "
-                   f"{p['exit_high']}d high {hi:.2f}, SMA{p['sma_trend']} {trend:.2f}"),
-        "metrics": {"close": round(close, 2), "channel_low": round(lo, 2),
-                    "channel_high": round(hi, 2), "sma_trend": round(trend, 2)},
-    }
+    trend = sma(px, p["sma_trend"])
+    lo = df["Low"].shift(1).rolling(p["entry_low"]).min()
+    hi = df["High"].shift(1).rolling(p["exit_high"]).max()
+    return {"entry": (px < lo) & (px < trend), "exit": px > hi,
+            "ind": {"close": px, "channel_low": lo, "channel_high": hi,
+                    "sma_trend": trend}}
+
+
+def donchian_short(df: pd.DataFrame, p: dict) -> dict:
+    out = _last(donchian_short_series(df, p))
+    m = out["metrics"]
+    out["reason"] = (f"close {m['close']:.2f} vs {p['entry_low']}d low "
+                     f"{m['channel_low']:.2f} / {p['exit_high']}d high "
+                     f"{m['channel_high']:.2f}, SMA{p['sma_trend']} {m['sma_trend']:.2f}")
+    return out
+
+
+def rotation_targets(dfs: dict, p: dict) -> pd.Series:
+    """Per-day rotation target over the symbols' common dates: the leader by
+    lookback return while positive, else None (cash)."""
+    closes = pd.DataFrame({s: df["Close"] for s, df in dfs.items()}).dropna()
+    rets = (closes / closes.shift(p["lookback"]) - 1).dropna()
+    if rets.empty:
+        return pd.Series(dtype=object)
+    leader = rets.idxmax(axis=1).astype(object)
+    leader[~(rets.max(axis=1) > 0)] = None
+    return leader
 
 
 def momentum_rotation(dfs: dict, p: dict) -> dict:
-    """Relative momentum across symbols: rank by lookback return, hold the
-    leader while its return is positive, else cash. Not an entry/exit signal —
-    returns the target symbol (or None for cash)."""
-    rets = {}
+    """Scalar wrapper for the live engine: today's target plus the reason."""
     for symbol, df in dfs.items():
-        px = df["Close"]
-        if len(px) <= p["lookback"]:
-            return {"target": None, "reason": f"only {len(px)} bars for {symbol}",
+        if len(df) <= p["lookback"]:
+            return {"target": None, "reason": f"only {len(df)} bars for {symbol}",
                     "metrics": {}}
-        rets[symbol] = float(px.iloc[-1] / px.iloc[-(p["lookback"] + 1)] - 1)
+    rets = {s: float(df["Close"].iloc[-1] / df["Close"].iloc[-(p["lookback"] + 1)] - 1)
+            for s, df in dfs.items()}
     best = max(rets, key=rets.get)
     target = best if rets[best] > 0 else None
     detail = ", ".join(f"{s} {r:+.1%}" for s, r in sorted(rets.items()))

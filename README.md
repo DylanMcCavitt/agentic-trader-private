@@ -143,7 +143,9 @@ automatically.
 - `scripts/backtest.py` — backtest harness (same indicator math as decide.py)
 - `scripts/run_strategies.py` — the paper fleet: evaluates all 10 candidate
   strategies into per-strategy paper books (`state/paper.json`,
-  `logs/paper.md`); `scripts/scoreboard.py` ranks them —
+  `logs/paper.md`); `scripts/scoreboard.py` ranks them;
+  `scripts/backtest_fleet.py` replays the same signals over decades of
+  history (options via a documented Black-Scholes approximation) —
   see [`docs/strategies.md`](docs/strategies.md)
 - `config.json` — symbol, sizing caps, dry_run flag, and shared strategy
   params; `config.local.json` (untracked) deep-merges over it and holds the
