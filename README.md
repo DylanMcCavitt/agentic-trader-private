@@ -1,70 +1,108 @@
 # agentic-trader
 
-Autonomous RSI(2) mean-reversion swing trader for a dedicated, capped
-brokerage account, executed by a scheduled headless Claude Code session via
-Robinhood's official Agentic Trading MCP.
+An autonomous trading agent: a scheduled, headless Claude Code session that
+trades through a broker MCP (Robinhood's official Agentic Trading connector),
+with safety enforced by **deterministic, model-independent guardrails** rather
+than by trusting the model. The trading strategy is a pluggable worked example
+— what this repo is really about is the harness.
 
-## Strategy (Connors RSI-2, long-only, SPY)
+## How a run works
 
-- **Entry**: close > 200-day SMA and RSI(2) < 10 → buy ~95% of buying power
-  (dollar-based market order, fractional).
-- **Exit**: close > 5-day SMA → sell the full position.
-- Signals computed at ~3:45pm ET using the live price as a provisional close.
-- Backtest (yfinance daily, 2bps slippage/side): SPY 1993–2026: 4.9% CAGR,
-  Sharpe 0.79, max DD −14.8%, 77% win rate, ~8 trades/yr, avg hold 5 days,
-  14% market exposure. 2020–2026: Sharpe 1.03. This strategy does NOT beat
-  buy-and-hold absolutely — its appeal is high per-trade expectancy with low
-  exposure and shallow drawdowns. Reproduce with `uv run scripts/backtest.py`.
+`launchd` (com.example.agentic-trader, weekdays 15:45 ET) → `run.sh`
+(time-window + lock guard) → `claude -p` executes [`TRADER.md`](TRADER.md) →
+`scripts/decide.py` computes the signal → Robinhood MCP reviews/places orders
+→ journal + state + macOS notification.
+
+The model never decides *what* to trade. It orchestrates: fetch a quote,
+check the position, call the decision script, place (or not place) one order,
+write the journal. Every step that matters is checked by code it cannot edit
+or bypass.
+
+## Trust model: guardrails, not vibes
+
+The premise: an LLM is a capable operator but an untrusted one. So every
+safety property is enforced **outside the model's control** — in a PreToolUse
+hook, in file permissions, in tracked config — never by prompt instructions
+alone. Eight guardrail layers, all deterministic:
+
+1. **Dry-run by default.** `config.json` ships with `dry_run: true`; the gate
+   blocks every live order until you deliberately flip it. Orders are still
+   reviewed and journaled, so you can watch the agent work risk-free.
+2. **A deterministic PreToolUse order gate.** `scripts/order_gate.py` is wired
+   as a Claude Code hook on `place_equity_order`. It is plain Python the
+   harness runs *before* the tool call executes — the model cannot skip it,
+   argue with it, or edit it (the settings only allow writes to `state/` and
+   `logs/`). Exit 2 blocks the order; it also **fails closed**: a missing or
+   unparsable `config.json` or `state/state.json` blocks outright.
+3. **Symbol + account whitelist.** Orders for any symbol other than the one
+   configured, or any account other than the configured agentic account, are
+   blocked. The real account number lives only in untracked
+   `config.local.json`; until it exists, every order is hard-blocked.
+4. **Per-order dollar cap.** Buys must be market orders sized in dollars and
+   at most `max_order_usd`.
+5. **One order per day.** A second placement on the same day is blocked, no
+   matter what the session thinks happened.
+6. **Market-hours check.** Orders outside regular weekday market hours (ET)
+   are blocked.
+7. **Drawdown kill switch with manual reset.** If portfolio value falls
+   `kill_drawdown_pct` below its high-water mark, `halt: true` is set in
+   `state/state.json` and the gate blocks all trading until a human resets it.
+8. **Audit journal of every run.** Each run appends one entry to
+   `logs/journal.md` — signal JSON, action taken (or the blocked/DRY-RUN
+   reason), order id and fill state — so there is a paper trail even for runs
+   that did nothing.
+
+The gate is the trust boundary. [`TRADER.md`](TRADER.md) reinforces it from
+the prompt side — a gate block is final, and the agent is explicitly forbidden
+from retrying with altered parameters to get around it — but the guarantee
+never depends on the model obeying. Beyond the gate, the broker side is its
+own sandbox: the MCP can only trade in the dedicated agentic account, and that
+account's funding is the hard loss cap.
+
+## `.claude/settings.json` is the feature
+
+The headline of this repo is its [`.claude/settings.json`](.claude/settings.json),
+published as-is. It wires the harness:
+
+- **PreToolUse hook**: matcher `mcp__.*place_equity_order` runs
+  `scripts/order_gate.py` before any order placement reaches the broker.
+- **Allow/deny permissions**: the session may read the repo, write only
+  `state/**` and `logs/**`, and run a short whitelist of commands
+  (`uv run`, `osascript`, `uuidgen`, `date`, `sleep`) plus the Robinhood MCP.
+  Reads of `~/.secrets/**` and `.env` files are denied.
+
+That file, plus `run.sh`'s `--permission-mode dontAsk --max-turns 40`, is the
+whole containment story: a headless agent with real-money tools, boxed in by
+configuration the agent cannot modify.
+
+## The strategy is pluggable
+
+The agent consumes a single decision interface:
+
+```
+uv run scripts/decide.py --price <live_price> --holding <true|false>
+```
+
+→ decision JSON: `{"decision": "BUY" | "SELL" | "HOLD" | "NONE", "reason": ...}`
+
+The shipped implementation is Connors RSI(2) mean reversion on SPY,
+long-only. Swap in any strategy that honors the same contract and nothing
+else in the harness changes — the guardrails apply regardless of what
+produces the signal. Full rules, parameters, and backtest methodology:
+[`docs/strategy.md`](docs/strategy.md).
+
+Honest framing, kept on purpose: the backtest does **not** beat buy-and-hold
+(SPY 1993–2026: 4.9% CAGR vs 10.8% for buy-and-hold). Its appeal is high
+per-trade expectancy with low exposure and shallow drawdowns — Sharpe 0.79,
+max drawdown −14.8%, 77% win rate, ~8 trades/yr, 14% market exposure.
+Reproduce with `uv run scripts/backtest.py`.
 
 ## Setup
 
 Dependencies are managed by a root `pyproject.toml` + committed `uv.lock`
 (pandas, yfinance; pytest in the dev group). `uv sync` from a clean checkout
 builds the env; `uv run scripts/<x>.py` resolves against the project env
-automatically — no per-script inline metadata.
-
-## How a run works
-
-`launchd` (com.example.agentic-trader, weekdays 15:45 ET) → `run.sh`
-(time-window + lock guard) → `claude -p` executes `TRADER.md` →
-`scripts/decide.py` computes the signal → Robinhood MCP places/reviews orders
-→ journal + state + macOS notification.
-
-## Safety layers
-
-1. **Robinhood-side sandbox** — the MCP can only trade in the Agentic account;
-   its funding is the hard loss cap.
-2. **`scripts/order_gate.py`** (PreToolUse hook, deterministic): blocks any
-   order when `dry_run` or `halt` is set, wrong account/symbol, buys not
-   market+dollar-sized, size > `max_order_usd`, outside market hours, or a
-   second order in one day. Fails closed: a missing or unparsable
-   `config.json` or `state/state.json` blocks the order outright (exit 2).
-3. **Kill switch**: portfolio value 15% below high-water mark → `halt: true`,
-   no further trading until manually reset in `state/state.json`.
-4. **`dry_run: true`** in `config.json` — orders are reviewed and journaled
-   but never placed. Flip to `false` to go live.
-
-## Files
-
-- `pyproject.toml` / `uv.lock` — pinned dependencies (uv-managed)
-- `config.json` — symbol, sizing caps, dry_run flag, and shared strategy
-  params read by both `decide.py` and `backtest.py`; `account_number` is the
-  `REPLACE_ME` placeholder
-  - `entry_rsi` — RSI(2) entry threshold
-  - `scale_rsi` — RSI(2) threshold for the backtest's second tranche
-  - `slippage_bps` — backtest slippage per side, in basis points
-- `config.local.json` — untracked (gitignored) local overrides, deep-merged
-  over `config.json` by the order gate and the trading run. Create it once
-  with the real account: `{"account_number": "<your account number>"}`. Until
-  it exists, the order gate hard-blocks every order.
-- `state/state.json` — untracked (gitignored) live state: high-water mark,
-  halt flag, last action. First-run bootstrap: copy the tracked example,
-  `cp state/state.example.json state/state.json`. Until it exists, the order
-  gate blocks every order (fail closed).
-- `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
-- `TRADER.md` — the exact procedure the headless session follows
-
-## Setup
+automatically.
 
 - Install the scheduler: `bash scripts/install-launchd.sh` — substitutes this
   repo's path into `com.example.agentic-trader.plist`, installs it to
@@ -72,9 +110,25 @@ automatically — no per-script inline metadata.
 - The weekday 15:45 schedule is intentional: the signal is computed at
   ~3:45pm ET using the live price as a provisional close, so orders can fill
   before the 4pm close. Don't change it without revisiting the strategy.
-- Migrating from an older install under a different label? Boot out the old
-  agent (`launchctl bootout gui/$UID/<old-label>`) and delete its plist from
-  `~/Library/LaunchAgents/` before installing.
+- First-run bootstrap: `cp state/state.example.json state/state.json`, and
+  create `config.local.json` with the real account number. Until both exist,
+  the order gate blocks every order (fail closed).
+
+## Files
+
+- [`.claude/settings.json`](.claude/settings.json) — hook wiring + permissions
+  (see above)
+- `TRADER.md` — the exact procedure the headless session follows
+- `scripts/order_gate.py` — the deterministic order gate (PreToolUse hook)
+- `scripts/decide.py` — the decision interface implementation
+- `scripts/backtest.py` — backtest harness (same indicator math as decide.py)
+- `config.json` — symbol, sizing caps, dry_run flag, and shared strategy
+  params; `config.local.json` (untracked) deep-merges over it and holds the
+  real account number — see [`docs/config.md`](docs/config.md) for the full
+  reference
+- `state/state.json` — untracked live state: high-water mark, halt flag,
+  last action
+- `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
 
 ## Ops
 
@@ -82,6 +136,8 @@ automatically — no per-script inline metadata.
 - Resume: `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.example.agentic-trader.plist`
 - The Mac must be awake at 3:45pm ET; launchd fires a missed run on wake but
   `run.sh` skips it outside 15:30–15:58 ET.
+- Kill-switch reset: after a drawdown halt, set `halt: false` in
+  `state/state.json` by hand — nothing resets it automatically.
 - Re-auth: if the claude.ai Robinhood connector token expires, runs will
   journal MCP errors — reconnect via claude.ai → Settings → Connectors.
 
