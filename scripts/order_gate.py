@@ -6,12 +6,22 @@ to the model); exit 0 allows it. This gate, not the model, is the real
 guardrail — keep every rule here mechanical.
 """
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).parent.parent
+# Test seam: ORDER_GATE_ROOT overrides the repo root (unset in production).
+ROOT = Path(os.environ.get("ORDER_GATE_ROOT") or Path(__file__).parent.parent)
+
+
+def now_et() -> datetime:
+    """Current time in ET. Test seam: ORDER_GATE_NOW (ISO 8601) overrides."""
+    override = os.environ.get("ORDER_GATE_NOW")
+    if override:
+        return datetime.fromisoformat(override)
+    return datetime.now(ZoneInfo("America/New_York"))
 
 
 def block(msg: str) -> None:
@@ -86,7 +96,7 @@ def main() -> None:
     else:
         block(f"unknown side {side!r}")
 
-    now = datetime.now(ZoneInfo("America/New_York"))
+    now = now_et()
     if now.weekday() > 4 or not (9 <= now.hour < 16):
         block(f"outside regular market hours ({now:%a %H:%M} ET)")
 
