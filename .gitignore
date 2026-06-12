@@ -4,4 +4,5 @@ __pycache__/
 config.local.json
 state/state.json
 state/paper.json
+state/allocator.json
 .venv/
