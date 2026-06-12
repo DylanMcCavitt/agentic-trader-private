@@ -232,3 +232,199 @@ def test_main_table_marks_insufficient(tmp_path, monkeypatch, capsys):
     write_state(p, {"newbie": make_book([0.01] * 3)})
     run_main(monkeypatch, p)
     assert "insufficient data" in capsys.readouterr().out
+
+
+# --- Thompson sampling (slice 2) ------------------------------------------------
+
+DOMINANT = [0.006, 0.002] * 30   # mean 0.004/day, 60 days of evidence
+MEDIOCRE = [0.002, -0.002] * 30  # mean 0/day, same length
+SPARSE = [0.05] * 5              # huge returns but insufficient data
+
+
+def fleet_books():
+    return {"dominant": make_book(DOMINANT),
+            "mediocre": make_book(MEDIOCRE),
+            "sparse": make_book(SPARSE)}
+
+
+def test_posterior_params_scored_book_shrinks_with_n_eff():
+    scored = allocate.score_book(make_book(DOMINANT))
+    mean, std = allocate.posterior_params(scored)
+    assert mean == pytest.approx(scored["mean"])
+    assert std == pytest.approx(scored["std"] / math.sqrt(scored["n_eff"]))
+    assert std < scored["std"]  # posterior on the mean is tighter than raw std
+
+
+def test_posterior_params_insufficient_gets_diffuse_prior():
+    scored = allocate.score_book(make_book(SPARSE))
+    mean, std = allocate.posterior_params(scored)
+    assert (mean, std) == (0.0, allocate.PRIOR_STD)
+
+
+def test_pick_seed_derives_from_date_plus_offset():
+    assert allocate.pick_seed("2026-06-12") == 20260612
+    assert allocate.pick_seed("2026-06-12", seed=7) == 20260619
+
+
+def test_thompson_pick_is_deterministic_for_same_date_and_books():
+    a = allocate.thompson_pick(fleet_books(), "2026-06-12")
+    b = allocate.thompson_pick(fleet_books(), "2026-06-12")
+    assert a == b
+
+
+def test_thompson_pick_independent_of_dict_insertion_order():
+    books = fleet_books()
+    reversed_books = dict(reversed(list(books.items())))
+    assert (allocate.thompson_pick(books, "2026-06-12")
+            == allocate.thompson_pick(reversed_books, "2026-06-12"))
+
+
+def test_thompson_pick_changes_with_date_and_seed():
+    base = allocate.thompson_pick(fleet_books(), "2026-06-12")
+    other_date = allocate.thompson_pick(fleet_books(), "2026-06-13")
+    other_seed = allocate.thompson_pick(fleet_books(), "2026-06-12", seed=1)
+    draws = lambda r: [row["draw"] for row in r["rows"]]  # noqa: E731
+    assert draws(base) != draws(other_date)
+    assert draws(base) != draws(other_seed)
+
+
+def test_thompson_pick_champion_is_highest_draw_and_weights_normalize():
+    result = allocate.thompson_pick(fleet_books(), "2026-06-12")
+    rows = result["rows"]
+    assert result["champion"] == rows[0]["strategy"]
+    assert [r["draw"] for r in rows] == sorted(
+        (r["draw"] for r in rows), reverse=True)
+    assert sum(r["weight"] for r in rows) == pytest.approx(1.0)
+    assert [r["weight"] for r in rows] == sorted(
+        (r["weight"] for r in rows), reverse=True)
+
+
+def test_thompson_pick_marks_insufficient_but_keeps_it_eligible():
+    result = allocate.thompson_pick(fleet_books(), "2026-06-12")
+    by_name = {r["strategy"]: r for r in result["rows"]}
+    assert by_name["sparse"]["insufficient"] is True
+    assert by_name["sparse"]["post_std"] == allocate.PRIOR_STD
+    assert by_name["dominant"]["insufficient"] is False
+
+
+def test_thompson_pick_empty_books():
+    result = allocate.thompson_pick({}, "2026-06-12")
+    assert result["champion"] is None
+    assert result["rows"] == []
+
+
+def pick_dates(n=300, start="2025-01-01"):
+    import datetime as dt
+    d0 = dt.date.fromisoformat(start)
+    return [(d0 + dt.timedelta(days=i)).isoformat() for i in range(n)]
+
+
+def win_counts(books, dates):
+    counts = {name: 0 for name in books}
+    for d in dates:
+        counts[allocate.thompson_pick(books, d)["champion"]] += 1
+    return counts
+
+
+def test_dominant_strategy_wins_majority_sparse_still_explores():
+    dates = pick_dates()
+    counts = win_counts(fleet_books(), dates)
+    assert counts["dominant"] > len(dates) / 2   # exploitation
+    assert counts["sparse"] > 0                  # exploration never dies
+    # mediocre's posterior sits ~10 sigma below dominant's — it should
+    # essentially never out-draw it
+    assert counts["mediocre"] < counts["dominant"]
+
+
+def test_dominant_win_share_grows_with_more_and_stronger_evidence():
+    dates = pick_dates()
+    before = win_counts(fleet_books(), dates)
+    stronger = fleet_books()
+    stronger["dominant"] = make_book([0.008, 0.004] * 75)  # longer + stronger
+    after = win_counts(stronger, dates)
+    assert after["dominant"] > before["dominant"]
+
+
+# --- pick CLI -------------------------------------------------------------------
+
+def test_main_pick_is_byte_identical_across_reruns(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12")
+    first = capsys.readouterr().out
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12")
+    assert capsys.readouterr().out == first
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--json")
+    first_json = capsys.readouterr().out
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--json")
+    assert capsys.readouterr().out == first_json
+
+
+def test_main_pick_table_shows_champion_and_marks_insufficient(
+        tmp_path, monkeypatch, capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12")
+    out = capsys.readouterr().out
+    assert "champion:" in out
+    assert "insufficient data (diffuse prior)" in out
+
+
+def test_main_pick_json_shape(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--seed", "3",
+             "--json")
+    out = json.loads(capsys.readouterr().out)
+    assert out["date"] == "2026-06-12"
+    assert out["seed"] == 3
+    assert out["prior_std"] == allocate.PRIOR_STD
+    assert out["champion"] in {"dominant", "mediocre", "sparse"}
+    assert len(out["rows"]) == 3
+    assert out["champion"] == out["rows"][0]["strategy"]
+    for r in out["rows"]:
+        for key in ("draw", "weight", "post_mean", "post_std", "days",
+                    "insufficient"):
+            assert key in r
+    by_name = {r["strategy"]: r for r in out["rows"]}
+    assert by_name["sparse"]["insufficient"] is True
+
+
+def test_main_pick_seed_offset_changes_draws(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--json")
+    a = json.loads(capsys.readouterr().out)
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--seed", "99",
+             "--json")
+    b = json.loads(capsys.readouterr().out)
+    assert [r["draw"] for r in a["rows"]] != [r["draw"] for r in b["rows"]]
+
+
+def test_main_pick_empty_books_says_nothing_to_pick(tmp_path, monkeypatch,
+                                                    capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, {})
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12")
+    assert "nothing to pick" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bad", ["2026-13-01", "yesterday", "20260612"])
+def test_main_pick_bad_date_is_usage_error(tmp_path, monkeypatch, capsys, bad):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, p, "--pick", "--date", bad)
+    assert exc.value.code == 2
+    assert "--date must be YYYY-MM-DD" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [("--date", "2026-06-12"), ("--seed", "5")])
+def test_main_date_or_seed_without_pick_is_usage_error(tmp_path, monkeypatch,
+                                                       capsys, argv):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, p, *argv)
+    assert exc.value.code == 2
+    assert "--date/--seed only apply with --pick" in capsys.readouterr().err
