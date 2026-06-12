@@ -51,3 +51,15 @@ Robinhood's official Agentic Trading MCP.
   `run.sh` skips it outside 15:30–15:58 ET.
 - Re-auth: if the claude.ai Robinhood connector token expires, runs will
   journal MCP errors — reconnect via claude.ai → Settings → Connectors.
+
+## Disclaimer
+
+This project is educational/reference software for studying agentic trading
+harnesses. It is not investment advice, and nothing in this repository is a
+recommendation to buy or sell any security. When `dry_run` is set to `false`
+in `config.json`, it trades real money in a live brokerage account — losses
+are entirely possible and entirely yours. If you run it live, use a dedicated
+brokerage account funded only with money you can afford to lose; the account
+balance is the hard loss cap. The software is provided without warranty of any
+kind (see [LICENSE](LICENSE)). The shipped default is the safe configuration:
+`dry_run: true`, so no orders are ever placed until you deliberately change it.
