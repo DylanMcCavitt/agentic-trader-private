@@ -8,6 +8,29 @@ with safety enforced by **deterministic, model-independent guardrails** rather
 than by trusting the model. The trading strategy is a pluggable worked example
 — what this repo is really about is the harness.
 
+```mermaid
+flowchart TD
+    L["launchd — weekdays 15:45 ET"] --> R["run.sh — time-window + lock guard"]
+    R --> C["claude -p — executes TRADER.md"]
+    C --> D["scripts/decide.py — deterministic signal"]
+    D --> RV["Robinhood MCP — review order"]
+    RV --> EG
+    RV --> OG
+    subgraph TB["TRUST BOUNDARY — deterministic PreToolUse gates"]
+        EG["scripts/order_gate.py (equities)"]
+        OG["scripts/option_gate.py (options)"]
+    end
+    EG -->|"exit 0 — allow"| PL["Robinhood MCP — place order"]
+    OG -->|"exit 0 — allow"| PL
+    EG -.->|"exit 2 — block"| J["journal + state + notification"]
+    OG -.->|"exit 2 — block"| J
+    PL --> J
+
+    classDef gate fill:#fde8e8,stroke:#c0392b,stroke-width:2px
+    class EG,OG gate
+    style TB fill:#fff5f5,stroke:#c0392b,stroke-width:2px,stroke-dasharray:6 4
+```
+
 ## How a run works
 
 `launchd` (com.example.agentic-trader, weekdays 15:45 ET) → `run.sh`
