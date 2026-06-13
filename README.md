@@ -1,5 +1,7 @@
 # agentic-trader
 
+[![CI](https://github.com/DylanMcCavitt/agentic-trader/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/DylanMcCavitt/agentic-trader/actions/workflows/ci.yml)
+
 An autonomous trading agent: a scheduled, headless Claude Code session that
 trades through a broker MCP (Robinhood's official Agentic Trading connector),
 with safety enforced by **deterministic, model-independent guardrails** rather
