@@ -60,6 +60,15 @@ def main() -> None:
         block(f"cannot load config/state ({type(exc).__name__}: {exc})")
     order = payload.get("tool_input", {})
 
+    # Fail closed on incomplete config: every required key must be present.
+    # Existence, not truthiness — a missing dry_run must block (treating it as
+    # "not dry-run -> live" is the fail-open hole this closes), while an
+    # explicit dry_run=false is a valid present value handled downstream.
+    required = ("symbol", "max_order_usd", "account_number", "dry_run")
+    missing = [k for k in required if k not in cfg]
+    if missing:
+        block(f"config is missing required key(s): {', '.join(missing)}")
+
     # Guardrail: the real account number lives only in untracked
     # config.local.json. Missing file or placeholder value = hard block.
     if not (ROOT / "config.local.json").exists():
@@ -87,7 +96,12 @@ def main() -> None:
     if side == "buy":
         if order.get("type") != "market" or "dollar_amount" not in order:
             block("buys must be market orders sized with dollar_amount")
-        amt = float(order["dollar_amount"])
+        try:
+            amt = float(order["dollar_amount"])
+        except (TypeError, ValueError):
+            block(f"dollar_amount {order.get('dollar_amount')!r} is not numeric")
+        if amt <= 0:
+            block(f"dollar_amount {amt} must be > 0")
         if amt > cfg["max_order_usd"]:
             block(f"dollar_amount {amt} exceeds max_order_usd {cfg['max_order_usd']}")
     elif side == "sell":

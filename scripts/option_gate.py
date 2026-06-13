@@ -71,6 +71,16 @@ def main() -> None:
         block(f"cannot load config/state ({type(exc).__name__}: {exc})")
     order = payload.get("tool_input", {})
 
+    # Fail closed on incomplete config: every required key must be present.
+    # Existence, not truthiness — a missing dry_run must block (treating it as
+    # "not dry-run -> live" is the fail-open hole this closes), while an
+    # explicit dry_run=false is a valid present value handled downstream.
+    required = ("symbol", "max_order_usd", "account_number", "dry_run",
+                "max_option_premium_usd", "max_option_contracts")
+    missing = [k for k in required if k not in cfg]
+    if missing:
+        block(f"config is missing required key(s): {', '.join(missing)}")
+
     if not (ROOT / "config.local.json").exists():
         block(
             "config.local.json is missing — create it next to config.json "
@@ -119,7 +129,13 @@ def main() -> None:
     if side == ("buy", "open"):
         if order.get("type", "limit") != "limit" or not order.get("price"):
             block("opens must be limit orders with a price")
-        premium = float(order["price"]) * qty * 100
+        try:
+            price = float(order["price"])
+        except (TypeError, ValueError):
+            block(f"price {order.get('price')!r} is not numeric")
+        if price <= 0:
+            block(f"price {price} must be > 0")
+        premium = price * qty * 100
         if premium > max_premium:
             block(f"premium ${premium:.2f} (price x qty x 100) exceeds "
                   f"max_option_premium_usd {max_premium}")

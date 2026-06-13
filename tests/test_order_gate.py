@@ -186,16 +186,39 @@ def test_second_order_same_day_blocks(tmp_path):
     assert_blocked(result, "already placed today")
 
 
-# 11b. any crash inside the gate -> block, never allow (fail closed)
-@pytest.mark.parametrize("kw", [
-    {"order": "non-numeric-amount"},
-    {"config": dict(BASE_CONFIG, max_order_usd="lots")},
-], ids=["bad-amount", "bad-config-cap"])
-def test_gate_crash_fails_closed(tmp_path, kw):
-    order = valid_buy(dollar_amount="$100") if kw.get("order") else valid_buy()
-    config = kw.get("config", _OMIT)
-    result = run_gate(make_root(tmp_path, config=config), order)
+# 11b. a non-numeric dollar_amount is rejected with an explicit message
+# (not the generic catch-all), but still fails closed at exit 2.
+def test_non_numeric_dollar_amount_blocks(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_buy(dollar_amount="$100"))
+    assert_blocked(result, "dollar_amount '$100' is not numeric")
+
+
+# 11b'. a non-positive dollar_amount is rejected explicitly.
+@pytest.mark.parametrize("amt", [0, -50], ids=["zero", "negative"])
+def test_non_positive_dollar_amount_blocks(tmp_path, amt):
+    result = run_gate(make_root(tmp_path), valid_buy(dollar_amount=amt))
+    assert_blocked(result, "must be > 0")
+
+
+# 11b''. a non-numeric config cap still trips the catch-all (fail closed).
+def test_gate_crash_fails_closed(tmp_path):
+    config = dict(BASE_CONFIG, max_order_usd="lots")
+    result = run_gate(make_root(tmp_path, config=config), valid_buy())
     assert_blocked(result, "gate error")
+
+
+# 11b'''. a config that parses but is missing any required key -> block.
+@pytest.mark.parametrize(
+    "key", ["symbol", "max_order_usd", "account_number", "dry_run"]
+)
+def test_missing_required_config_key_blocks(tmp_path, key):
+    config = {k: v for k, v in BASE_CONFIG.items() if k != key}
+    # config.local also supplies account_number/dry_run, so drop it there too.
+    local = {k: v for k, v in {"account_number": FAKE_ACCOUNT,
+                               "dry_run": False}.items() if k != key}
+    result = run_gate(make_root(tmp_path, config=config, local=local),
+                      valid_buy())
+    assert_blocked(result, f"missing required key(s): {key}")
 
 
 # 11c. malformed stdin payload -> block, never an unhandled traceback
