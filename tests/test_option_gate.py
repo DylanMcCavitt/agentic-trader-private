@@ -130,10 +130,18 @@ def test_placeholder_account_blocks(tmp_path):
     assert_blocked(run_gate(root, valid_open()), "REPLACE_ME placeholder")
 
 
-# 4. options not configured -> block (fail closed)
+# 4. options not configured -> block (fail closed). Missing caps now trip the
+# required-key check first (explicit, clear message), still exit 2.
 def test_missing_option_caps_block(tmp_path):
     config = {k: v for k, v in BASE_CONFIG.items()
               if not k.startswith("max_option")}
+    result = run_gate(make_root(tmp_path, config=config), valid_open())
+    assert_blocked(result, "missing required key(s)")
+
+
+# 4'. caps present but falsy (e.g. 0) -> options-not-enabled block still fires.
+def test_falsy_option_caps_block(tmp_path):
+    config = dict(BASE_CONFIG, max_option_premium_usd=0, max_option_contracts=0)
     result = run_gate(make_root(tmp_path, config=config), valid_open())
     assert_blocked(result, "options trading is not enabled")
 
@@ -210,6 +218,29 @@ def test_outside_market_hours_blocks(tmp_path, now):
     assert_blocked(result, "outside regular market hours")
 
 
+# 10'. weekday US market holiday at 10:30 ET -> block with the holiday message
+# (distinct from the generic "outside regular market hours"). 2026-06-19 is
+# Juneteenth, a Friday.
+def test_market_holiday_blocks(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_open(),
+                      now="2026-06-19T10:30:00")
+    assert_blocked(result, "market holiday")
+
+
+# 10''. early-close half-day: an order at 14:00 ET on 2026-11-27 (13:00 close)
+# is after the early close -> blocked; 11:00 ET that day is still allowed.
+def test_early_close_after_close_blocks(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_open(),
+                      now="2026-11-27T14:00:00")
+    assert_blocked(result, "outside regular market hours")
+
+
+def test_early_close_before_close_allowed(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_open(),
+                      now="2026-11-27T11:00:00")
+    assert result.returncode == 0, result.stderr
+
+
 # 11. second option order same day -> block
 def test_second_option_order_same_day_blocks(tmp_path):
     state = dict(BASE_STATE,
@@ -218,37 +249,99 @@ def test_second_option_order_same_day_blocks(tmp_path):
     assert_blocked(result, "option order was already placed today")
 
 
-# equity orders that day do NOT consume the option budget
+# equity orders that day do NOT consume the option budget. An equity marker
+# (state/gate_equity.json) must not block an option order either.
 def test_equity_order_today_does_not_block_option(tmp_path):
-    state = dict(BASE_STATE,
-                 last_action={"date": "2026-06-10", "order_placed": True})
-    result = run_gate(make_root(tmp_path, state=state), valid_open())
+    root = make_root(
+        tmp_path,
+        state=dict(BASE_STATE,
+                   last_action={"date": "2026-06-10", "order_placed": True}),
+    )
+    # also drop an equity-gate marker to prove the option gate ignores it
+    (root / "state" / "gate_equity.json").write_text(
+        json.dumps({"date": "2026-06-10"}))
+    result = run_gate(root, valid_open())
     assert result.returncode == 0, result.stderr
 
 
-# 11b. the gate records the allowed attempt itself, so a second order the
-# same day is blocked without any other writer touching the state file
-def test_allow_records_attempt_and_blocks_second_order(tmp_path):
+# 11b. the gate records the allowed attempt in its OWN marker file (not
+# state.json), so a second order the same day is blocked without any model
+# write touching state.json.
+def test_allow_writes_marker_and_blocks_second_order(tmp_path):
     root = make_root(tmp_path)
     first = run_gate(root, valid_open())
     assert first.returncode == 0, first.stderr
-    recorded = json.loads((root / "state" / "state.json").read_text())
-    assert recorded["last_option_action"] == {"date": "2026-06-10",
-                                              "order_placed": True}
+    marker = root / "state" / "gate_option.json"
+    assert json.loads(marker.read_text()) == {"date": "2026-06-10"}
+    # the gate must NOT have written last_option_action into state.json
+    state_after = json.loads((root / "state" / "state.json").read_text())
+    assert state_after.get("last_option_action") is None
     assert_blocked(run_gate(root, valid_open()),
                    "option order was already placed today")
 
 
-# 11c. any crash inside the gate -> block, never allow (fail closed)
-@pytest.mark.parametrize("kw", [
-    {"order": "non-numeric-price"},
-    {"config": dict(BASE_CONFIG, max_option_premium_usd="lots")},
-], ids=["bad-price", "bad-config-cap"])
-def test_gate_crash_fails_closed(tmp_path, kw):
-    order = valid_open(price="$5.00") if kw.get("order") else valid_open()
-    config = kw.get("config", _OMIT)
-    result = run_gate(make_root(tmp_path, config=config), order)
+# 11b'. the marker does not carry across ET dates.
+def test_marker_does_not_carry_across_dates(tmp_path):
+    root = make_root(tmp_path)
+    assert run_gate(root, valid_open(), now="2026-06-10T10:30:00").returncode == 0
+    second = run_gate(root, valid_open(), now="2026-06-11T10:30:00")
+    assert second.returncode == 0, second.stderr
+
+
+# 11b''. converse of the equity test: an option order today (its marker) must
+# NOT make the equity gate think an equity order was placed — independence is
+# enforced by separate marker files. Verified here by confirming the option
+# gate writes only its own marker and never the equity one.
+def test_option_order_does_not_write_equity_marker(tmp_path):
+    root = make_root(tmp_path)
+    assert run_gate(root, valid_open()).returncode == 0
+    assert not (root / "state" / "gate_equity.json").exists()
+
+
+# 11b'''. a corrupt existing marker fails closed; a missing marker (fresh
+# root) allows the first order (already covered by the allow tests).
+def test_corrupt_marker_fails_closed(tmp_path):
+    root = make_root(tmp_path)
+    (root / "state" / "gate_option.json").write_text("{not json")
+    assert_blocked(run_gate(root, valid_open()), "gate marker unreadable")
+
+
+# 11c. a non-numeric price is rejected with an explicit message (not the
+# generic catch-all), still fails closed at exit 2.
+@pytest.mark.parametrize("price", ["$5.00", "5,00"], ids=["dollar-sign", "comma"])
+def test_non_numeric_price_blocks(tmp_path, price):
+    result = run_gate(make_root(tmp_path), valid_open(price=price))
+    assert_blocked(result, "is not numeric")
+
+
+# 11c'. a non-positive price is rejected explicitly (the negative-premium hole).
+# Both "-5.00" and "0" are non-empty truthy strings, so they pass the
+# limit/price presence guard and reach the explicit > 0 check.
+@pytest.mark.parametrize("price", ["-5.00", "0"], ids=["negative", "zero"])
+def test_non_positive_price_blocks(tmp_path, price):
+    result = run_gate(make_root(tmp_path), valid_open(price=price))
+    assert_blocked(result, "must be > 0")
+
+
+# 11c''. a non-numeric config cap still trips the catch-all (fail closed).
+def test_gate_crash_fails_closed(tmp_path):
+    config = dict(BASE_CONFIG, max_option_premium_usd="lots")
+    result = run_gate(make_root(tmp_path, config=config), valid_open())
     assert_blocked(result, "gate error")
+
+
+# 11c'''. a config that parses but is missing any required key -> block.
+@pytest.mark.parametrize(
+    "key", ["symbol", "max_order_usd", "account_number", "dry_run",
+            "max_option_premium_usd", "max_option_contracts"]
+)
+def test_missing_required_config_key_blocks(tmp_path, key):
+    config = {k: v for k, v in BASE_CONFIG.items() if k != key}
+    local = {k: v for k, v in {"account_number": FAKE_ACCOUNT,
+                               "dry_run": False}.items() if k != key}
+    result = run_gate(make_root(tmp_path, config=config, local=local),
+                      valid_open())
+    assert_blocked(result, f"missing required key(s): {key}")
 
 
 # 12. missing/corrupt config or state -> block (fail closed)
