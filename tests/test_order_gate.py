@@ -186,6 +186,35 @@ def test_second_order_same_day_blocks(tmp_path):
     assert_blocked(result, "already placed today")
 
 
+# 11'. The gate caps itself via a gate-owned marker: two consecutive allowed
+# invocations on the same ET date with NO intervening model write to state —
+# first exit 0, second exit 2.
+def test_allow_writes_marker_and_blocks_second_order(tmp_path):
+    root = make_root(tmp_path)
+    first = run_gate(root, valid_buy())
+    assert first.returncode == 0, first.stderr
+    marker = root / "state" / "gate_equity.json"
+    assert json.loads(marker.read_text()) == {"date": "2026-06-10"}
+    assert_blocked(run_gate(root, valid_buy()), "already placed today")
+
+
+# 11''. The marker does not carry across ET dates: allow on date A, then a
+# call on date B (different ORDER_GATE_NOW) is allowed.
+def test_marker_does_not_carry_across_dates(tmp_path):
+    root = make_root(tmp_path)
+    assert run_gate(root, valid_buy(), now="2026-06-10T10:30:00").returncode == 0
+    second = run_gate(root, valid_buy(), now="2026-06-11T10:30:00")
+    assert second.returncode == 0, second.stderr
+
+
+# 11'''. A corrupt existing marker fails closed (block), but a MISSING marker
+# (fresh root) allows the first order.
+def test_corrupt_marker_fails_closed(tmp_path):
+    root = make_root(tmp_path)
+    (root / "state" / "gate_equity.json").write_text("{not json")
+    assert_blocked(run_gate(root, valid_buy()), "gate marker unreadable")
+
+
 # 11b. a non-numeric dollar_amount is rejected with an explicit message
 # (not the generic catch-all), but still fails closed at exit 2.
 def test_non_numeric_dollar_amount_blocks(tmp_path):

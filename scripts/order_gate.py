@@ -48,6 +48,31 @@ def load_config(root: Path = ROOT) -> dict:
     return cfg
 
 
+# Gate-owned marker: records "an equity order was allowed today (ET date)".
+# Separate from state.json (which the model also writes), so the once-per-day
+# cap can never depend on the model honestly recording its own permission.
+MARKER = ROOT / "state" / "gate_equity.json"
+
+
+def marker_blocks_today(today: str) -> bool:
+    """True if the gate's own marker shows an order was already allowed today.
+
+    Missing marker -> no prior order (normal first run, do NOT fail closed).
+    Corrupt/unreadable existing marker -> fail closed (block), per #48.
+    """
+    if not MARKER.exists():
+        return False
+    try:
+        return json.loads(MARKER.read_text()).get("date") == today
+    except Exception as exc:  # corrupt existing marker: fail closed
+        block(f"gate marker unreadable ({type(exc).__name__}: {exc})")
+
+
+def write_marker(today: str) -> None:
+    MARKER.parent.mkdir(parents=True, exist_ok=True)
+    MARKER.write_text(json.dumps({"date": today}))
+
+
 def main() -> None:
     payload = json.load(sys.stdin)
     if not payload.get("tool_name", "").endswith("place_equity_order"):
@@ -115,10 +140,17 @@ def main() -> None:
     if now.weekday() > 4 or not (9 * 60 + 30 <= minutes < 16 * 60):
         block(f"outside regular market hours ({now:%a %H:%M} ET)")
 
+    today = str(now.date())
+    # Gate-owned marker is the primary cap (model can't clobber it). The
+    # state.json read is kept as a secondary, back-compat block condition.
     last = state.get("last_action") or {}
-    if last.get("date") == str(now.date()) and last.get("order_placed"):
+    seeded = last.get("date") == today and last.get("order_placed")
+    if marker_blocks_today(today) or seeded:
         block("an order was already placed today (max 1/day)")
 
+    # Allow path: record the gate's own marker before exiting so the next
+    # invocation today is capped without any model write to state.
+    write_marker(today)
     sys.exit(0)
 
 

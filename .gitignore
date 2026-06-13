@@ -5,4 +5,6 @@ config.local.json
 state/state.json
 state/paper.json
 state/allocator.json
+state/gate_equity.json
+state/gate_option.json
 .venv/

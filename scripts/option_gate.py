@@ -9,8 +9,10 @@ fail closed on any unreadable config/state. Options-specific rules:
 - opens must be limit orders with a price; premium (price x qty x 100) is
   capped by max_option_premium_usd, contracts by max_option_contracts.
 - at most one option order per day: on allow, the gate records the attempt
-  in state last_option_action (a pre-tool-use record — it counts allowed
-  attempts, not fills, which errs on the side of blocking).
+  in its own marker file state/gate_option.json (a pre-tool-use record — it
+  counts allowed attempts, not fills, which errs on the side of blocking).
+  The marker is gate-owned and separate from state.json, so the cap cannot
+  depend on the model honestly recording its own permission.
 
 Known limit: the order payload carries only the option instrument UUID, so
 the underlying symbol cannot be verified here without a network call. The
@@ -57,6 +59,31 @@ def load_config(root: Path = ROOT) -> dict:
     if local.exists():
         cfg = deep_merge(cfg, json.loads(local.read_text()))
     return cfg
+
+
+# Gate-owned marker: records "an option order was allowed today (ET date)".
+# Its own file (separate from the equity marker and from state.json) so the
+# option cap is independent of the equity cap and of any model write.
+MARKER = ROOT / "state" / "gate_option.json"
+
+
+def marker_blocks_today(today: str) -> bool:
+    """True if the gate's own marker shows an option order was allowed today.
+
+    Missing marker -> no prior order (normal first run, do NOT fail closed).
+    Corrupt/unreadable existing marker -> fail closed (block), per #48.
+    """
+    if not MARKER.exists():
+        return False
+    try:
+        return json.loads(MARKER.read_text()).get("date") == today
+    except Exception as exc:  # corrupt existing marker: fail closed
+        block(f"gate marker unreadable ({type(exc).__name__}: {exc})")
+
+
+def write_marker(today: str) -> None:
+    MARKER.parent.mkdir(parents=True, exist_ok=True)
+    MARKER.write_text(json.dumps({"date": today}))
 
 
 def main() -> None:
@@ -145,13 +172,17 @@ def main() -> None:
     if now.weekday() > 4 or not (9 * 60 + 30 <= minutes < 16 * 60):
         block(f"outside regular market hours ({now:%a %H:%M} ET)")
 
+    today = str(now.date())
+    # Gate-owned marker is the primary cap (model can't clobber it). The
+    # state.json read is kept as a secondary, back-compat block condition.
     last = state.get("last_option_action") or {}
-    if last.get("date") == str(now.date()) and last.get("order_placed"):
+    seeded = last.get("date") == today and last.get("order_placed")
+    if marker_blocks_today(today) or seeded:
         block("an option order was already placed today (max 1/day)")
 
-    state["last_option_action"] = {"date": str(now.date()), "order_placed": True}
-    (ROOT / "state" / "state.json").write_text(json.dumps(state, indent=2))
-
+    # Allow path: record the gate's own marker (replaces the old write into
+    # state.json last_option_action, which the model could clobber).
+    write_marker(today)
     sys.exit(0)
 
 
