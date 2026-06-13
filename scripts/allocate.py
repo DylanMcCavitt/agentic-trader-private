@@ -183,10 +183,12 @@ def thompson_pick(books: dict, date_key: str, seed: int = 0,
     a scored incumbent (yesterday's champion) is retained unless the top
     challenger's draw exceeds the incumbent's draw by
     hysteresis * incumbent_posterior_std — a scale-aware switching margin.
-    incumbent=None (no history), an incumbent missing from books, an
-    insufficient-data incumbent, or hysteresis=0 all reduce to the plain
-    highest-draw pick (exact draw ties are measure-zero for gaussian
-    draws). Draws and weights are never altered by hysteresis.
+    incumbent=None (no history), an incumbent missing from books, a
+    diffuse-prior incumbent (insufficient data OR float-noise flat, e.g. a
+    book sitting in cash — its 1%/day prior std would otherwise grant a
+    near-unbreakable retention margin on the ~1e-3 draw scale), or
+    hysteresis=0 all reduce to the plain highest-draw pick (exact draw
+    ties are measure-zero for gaussian draws). Draws and weights are never altered by hysteresis.
 
     Determinism: each strategy's RNG is random.Random(f"{base}:{name}") —
     a string seed (stdlib hashes it with sha512, immune to PYTHONHASHSEED)
@@ -203,9 +205,12 @@ def thompson_pick(books: dict, date_key: str, seed: int = 0,
         scored = score_book(books[name], half_life, min_returns)
         mean, std = posterior_params(scored, prior_std)
         draw = random.Random(f"{base}:{name}").gauss(mean, std)
+        diffuse = bool(scored["insufficient"]
+                       or (scored["std"] is not None
+                           and scored["std"] <= STD_FLOOR))
         rows.append({"strategy": name, "draw": draw,
                      "post_mean": mean, "post_std": std,
-                     "days": scored["days"],
+                     "days": scored["days"], "diffuse": diffuse,
                      "insufficient": scored["insufficient"]})
     rows.sort(key=lambda r: (-r["draw"], r["strategy"]))
     n = len(rows)
@@ -213,7 +218,7 @@ def thompson_pick(books: dict, date_key: str, seed: int = 0,
         r["weight"] = (n - i) / (n * (n + 1) / 2)
     champion = rows[0]["strategy"] if rows else None
     inc = next((r for r in rows if r["strategy"] == incumbent), None)
-    if (inc is not None and not inc["insufficient"] and champion != incumbent
+    if (inc is not None and not inc["diffuse"] and champion != incumbent
             and rows[0]["draw"] <= inc["draw"] + hysteresis * inc["post_std"]):
         champion = incumbent
     return {"date": date_key, "seed": seed,

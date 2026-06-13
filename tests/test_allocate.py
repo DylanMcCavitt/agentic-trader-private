@@ -465,6 +465,25 @@ def test_insufficient_incumbent_is_displaceable_despite_huge_margin():
     pytest.fail("sparse won every draw — fixture broken")
 
 
+def test_flat_book_incumbent_is_displaceable_despite_huge_margin():
+    # a float-noise-flat incumbent (e.g. a book sitting in cash) rides the
+    # diffuse prior, so its 1%/day post_std must not buy it a retention
+    # margin — review finding: it would otherwise lock champion ~200 days
+    books = fleet_books()
+    books["flat"] = make_book([0.0] * 30)
+    for d in pick_dates(100):
+        plain = allocate.thompson_pick(books, d)
+        if plain["champion"] != "flat":
+            gated = allocate.thompson_pick(books, d, incumbent="flat",
+                                           hysteresis=1e9)
+            assert gated["champion"] == plain["champion"]
+            flat_row = next(r for r in gated["rows"]
+                            if r["strategy"] == "flat")
+            assert flat_row["diffuse"] and not flat_row["insufficient"]
+            return
+    pytest.fail("flat won every draw — fixture broken")
+
+
 def test_incumbent_missing_from_books_is_ignored():
     plain = allocate.thompson_pick(fleet_books(), "2026-06-12")
     gated = allocate.thompson_pick(fleet_books(), "2026-06-12",
