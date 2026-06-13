@@ -159,6 +159,10 @@ def test_empty_history_book_is_insufficient():
 
 def run_main(monkeypatch, paper_path, *argv):
     monkeypatch.setattr(allocate, "PAPER_PATH", paper_path)
+    # hermetic: --pick reads the hysteresis incumbent from ALLOC_PATH, so it
+    # must never point at a developer's real state/allocator.json here
+    monkeypatch.setattr(allocate, "ALLOC_PATH",
+                        paper_path.parent / "allocator.json")
     monkeypatch.setattr(sys, "argv", ["allocate.py", *argv])
     allocate.main()
 
@@ -388,6 +392,138 @@ def test_dominant_win_share_grows_with_more_and_stronger_evidence():
     assert after["dominant"] > before["dominant"]
 
 
+# --- switch hysteresis (issue #41) ------------------------------------------------
+
+def test_incumbent_none_is_plain_highest_draw():
+    result = allocate.thompson_pick(fleet_books(), "2026-06-12")
+    assert result["incumbent"] is None
+    assert result["hysteresis"] == allocate.HYSTERESIS
+    assert result["champion"] == result["rows"][0]["strategy"]
+
+
+def test_hysteresis_zero_with_incumbent_reproduces_plain_pick():
+    # h=0 must reproduce the slice-2 highest-draw behavior exactly, with the
+    # incumbent threaded day over day like the live CLI does
+    books = fleet_books()
+    incumbent = "mediocre"
+    for d in pick_dates(60):
+        plain = allocate.thompson_pick(books, d)
+        gated = allocate.thompson_pick(books, d, incumbent=incumbent,
+                                       hysteresis=0.0)
+        assert gated["champion"] == plain["champion"]
+        assert gated["rows"] == plain["rows"]  # draws/weights untouched
+        incumbent = gated["champion"]
+
+
+def test_incumbent_retained_when_challenger_within_margin():
+    # with an effectively infinite margin, a scored incumbent survives any
+    # out-draw; rows and weights still rank by raw draw
+    books = fleet_books()
+    for d in pick_dates(100):
+        plain = allocate.thompson_pick(books, d)
+        if plain["champion"] == "dominant":
+            gated = allocate.thompson_pick(books, d, incumbent="mediocre",
+                                           hysteresis=1e9)
+            assert gated["champion"] == "mediocre"
+            assert gated["rows"] == plain["rows"]
+            assert gated["rows"][0]["strategy"] == "dominant"
+            return
+    pytest.fail("no date where dominant out-drew mediocre")
+
+
+def test_displacement_threshold_is_h_incumbent_posterior_stds():
+    # the margin is scale-aware: challenger wins exactly when its draw beats
+    # the incumbent's by more than h * incumbent_posterior_std
+    books = fleet_books()
+    for d in pick_dates(100):
+        plain = allocate.thompson_pick(books, d)
+        top = plain["rows"][0]
+        inc = next(r for r in plain["rows"] if r["strategy"] == "mediocre")
+        if top["strategy"] != "mediocre" and top["draw"] > inc["draw"]:
+            gap_h = (top["draw"] - inc["draw"]) / inc["post_std"]
+            kept = allocate.thompson_pick(books, d, incumbent="mediocre",
+                                          hysteresis=gap_h * 1.01)
+            lost = allocate.thompson_pick(books, d, incumbent="mediocre",
+                                          hysteresis=gap_h * 0.99)
+            assert kept["champion"] == "mediocre"
+            assert lost["champion"] == top["strategy"]
+            return
+    pytest.fail("no date where mediocre was out-drawn")
+
+
+def test_insufficient_incumbent_is_displaceable_despite_huge_margin():
+    # an insufficient-data incumbent gets no hysteresis protection — same
+    # displaceability as before
+    books = fleet_books()
+    for d in pick_dates(100):
+        plain = allocate.thompson_pick(books, d)
+        if plain["champion"] != "sparse":
+            gated = allocate.thompson_pick(books, d, incumbent="sparse",
+                                           hysteresis=1e9)
+            assert gated["champion"] == plain["champion"]
+            return
+    pytest.fail("sparse won every draw — fixture broken")
+
+
+def test_flat_book_incumbent_is_displaceable_despite_huge_margin():
+    # a float-noise-flat incumbent (e.g. a book sitting in cash) rides the
+    # diffuse prior, so its 1%/day post_std must not buy it a retention
+    # margin — review finding: it would otherwise lock champion ~200 days
+    books = fleet_books()
+    books["flat"] = make_book([0.0] * 30)
+    for d in pick_dates(100):
+        plain = allocate.thompson_pick(books, d)
+        if plain["champion"] != "flat":
+            gated = allocate.thompson_pick(books, d, incumbent="flat",
+                                           hysteresis=1e9)
+            assert gated["champion"] == plain["champion"]
+            flat_row = next(r for r in gated["rows"]
+                            if r["strategy"] == "flat")
+            assert flat_row["diffuse"] and not flat_row["insufficient"]
+            return
+    pytest.fail("flat won every draw — fixture broken")
+
+
+def test_incumbent_missing_from_books_is_ignored():
+    plain = allocate.thompson_pick(fleet_books(), "2026-06-12")
+    gated = allocate.thompson_pick(fleet_books(), "2026-06-12",
+                                   incumbent="retired", hysteresis=1e9)
+    assert gated["champion"] == plain["champion"]
+    assert gated["incumbent"] == "retired"
+
+
+def test_thompson_pick_with_incumbent_is_deterministic():
+    a = allocate.thompson_pick(fleet_books(), "2026-06-12",
+                               incumbent="mediocre", hysteresis=2.0)
+    b = allocate.thompson_pick(fleet_books(), "2026-06-12",
+                               incumbent="mediocre", hysteresis=2.0)
+    assert a == b
+
+
+def test_last_recorded_champion_latest_entry_strictly_before_pick_date(
+        tmp_path):
+    path = tmp_path / "allocator.json"
+    path.write_text(json.dumps({"picks": [
+        {"date": "2026-06-10", "champion": "a"},
+        {"date": "2026-06-12", "champion": "c"},
+        {"date": "2026-06-11", "champion": "b"},
+    ]}))
+    assert allocate.last_recorded_champion("2026-06-13", path) == "c"
+    # a --force re-record of a date must not be its own incumbent
+    assert allocate.last_recorded_champion("2026-06-12", path) == "b"
+    assert allocate.last_recorded_champion("2026-06-10", path) is None
+
+
+@pytest.mark.parametrize("content", [None, "", "{not json", "[]", "null",
+                                     '{"picks": "abc"}', '{"picks": []}'])
+def test_last_recorded_champion_missing_or_bad_history_is_none(tmp_path,
+                                                               content):
+    path = tmp_path / "allocator.json"
+    if content is not None:
+        path.write_text(content)
+    assert allocate.last_recorded_champion("2026-06-12", path) is None
+
+
 # --- pick CLI -------------------------------------------------------------------
 
 def test_main_pick_is_byte_identical_across_reruns(tmp_path, monkeypatch, capsys):
@@ -413,9 +549,11 @@ def test_main_pick_is_byte_identical_across_hash_seeds(tmp_path):
     p = tmp_path / "paper.json"
     write_state(p, fleet_books())
     scripts = str(Path(allocate.__file__).parent)
+    alloc = tmp_path / "allocator.json"
     code = (f"import sys; sys.path.insert(0, {scripts!r}); "
             f"from pathlib import Path; import allocate; "
             f"allocate.PAPER_PATH = Path({str(p)!r}); "
+            f"allocate.ALLOC_PATH = Path({str(alloc)!r}); "
             f"sys.argv = ['allocate.py', '--pick', '--date', '2026-06-12', "
             f"'--json']; allocate.main()")
     outs = []
@@ -506,4 +644,66 @@ def test_main_date_or_seed_without_pick_is_usage_error(tmp_path, monkeypatch,
     with pytest.raises(SystemExit) as exc:
         run_main(monkeypatch, p, *argv)
     assert exc.value.code == 2
-    assert "--date/--seed only apply with --pick" in capsys.readouterr().err
+    assert ("--date/--seed/--hysteresis only apply with --pick"
+            in capsys.readouterr().err)
+
+
+def test_main_pick_json_reports_default_hysteresis_and_null_incumbent(
+        tmp_path, monkeypatch, capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--json")
+    out = json.loads(capsys.readouterr().out)
+    assert out["hysteresis"] == allocate.HYSTERESIS
+    assert out["incumbent"] is None
+
+
+def test_main_pick_reads_incumbent_from_allocator_history(tmp_path,
+                                                          monkeypatch, capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    (tmp_path / "allocator.json").write_text(json.dumps(
+        {"picks": [{"date": "2026-06-11", "champion": "mediocre"}]}))
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--json",
+             "--hysteresis", "1e9")
+    out = json.loads(capsys.readouterr().out)
+    assert out["incumbent"] == "mediocre"
+    assert out["hysteresis"] == 1e9
+    # mediocre is scored (sufficient data): an absurd margin retains it
+    assert out["champion"] == "mediocre"
+
+
+def test_main_pick_hysteresis_zero_matches_plain_pick_despite_incumbent(
+        tmp_path, monkeypatch, capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    (tmp_path / "allocator.json").write_text(json.dumps(
+        {"picks": [{"date": "2026-06-11", "champion": "mediocre"}]}))
+    run_main(monkeypatch, p, "--pick", "--date", "2026-06-12", "--json",
+             "--hysteresis", "0")
+    out = json.loads(capsys.readouterr().out)
+    assert out["champion"] == allocate.thompson_pick(
+        fleet_books(), "2026-06-12")["champion"]
+    assert out["champion"] == out["rows"][0]["strategy"]
+
+
+def test_main_hysteresis_without_pick_is_usage_error(tmp_path, monkeypatch,
+                                                     capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, p, "--hysteresis", "1")
+    assert exc.value.code == 2
+    assert ("--date/--seed/--hysteresis only apply with --pick"
+            in capsys.readouterr().err)
+
+
+def test_main_negative_hysteresis_is_usage_error(tmp_path, monkeypatch,
+                                                 capsys):
+    p = tmp_path / "paper.json"
+    write_state(p, fleet_books())
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, p, "--pick", "--date", "2026-06-12",
+                 "--hysteresis", "-1")
+    assert exc.value.code == 2
+    assert "--hysteresis must be >= 0" in capsys.readouterr().err

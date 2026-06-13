@@ -199,6 +199,46 @@ def test_force_without_record_is_usage_error(tmp_path, monkeypatch, capsys):
     assert "--force only applies with --record" in capsys.readouterr().err
 
 
+# --- switch hysteresis through --record (issue #41) -------------------------------
+
+def test_record_persists_hysteresis_and_incumbent(tmp_path, monkeypatch,
+                                                  capsys):
+    run_allocate(monkeypatch, tmp_path, "--pick", "--record",
+                 "--date", "2026-06-12")
+    capsys.readouterr()
+    entry = read_history(tmp_path)["picks"][0]
+    assert entry["hysteresis"] == allocate.HYSTERESIS
+    assert entry["incumbent"] is None  # no history before the first record
+
+
+def test_record_threads_incumbent_from_previous_recorded_pick(
+        tmp_path, monkeypatch, capsys):
+    run_allocate(monkeypatch, tmp_path, "--pick", "--record",
+                 "--date", "2026-06-12")
+    capsys.readouterr()
+    first = read_history(tmp_path)["picks"][0]["champion"]
+    run_allocate(monkeypatch, tmp_path, "--pick", "--record",
+                 "--date", "2026-06-13", "--hysteresis", "1e9")
+    capsys.readouterr()
+    entry = read_history(tmp_path)["picks"][-1]
+    assert entry["incumbent"] == first
+    assert entry["hysteresis"] == 1e9
+    # day 1's champion is dominant (scored): an absurd margin keeps it
+    if first != "sparse":
+        assert entry["champion"] == first
+
+
+def test_record_force_rerecord_is_not_its_own_incumbent(tmp_path, monkeypatch,
+                                                        capsys):
+    run_allocate(monkeypatch, tmp_path, "--pick", "--record",
+                 "--date", "2026-06-12")
+    run_allocate(monkeypatch, tmp_path, "--pick", "--record", "--force",
+                 "--date", "2026-06-12")
+    capsys.readouterr()
+    entry = read_history(tmp_path)["picks"][0]
+    assert entry["incumbent"] is None  # only entries dated before count
+
+
 # --- pure helpers -----------------------------------------------------------------
 
 def test_upsert_pick_statuses_and_order():

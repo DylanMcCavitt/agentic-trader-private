@@ -17,6 +17,14 @@ uses live each morning, when only yesterday's marks exist. Day t's
 meta-return is then that prior-data champion's t-1 -> t book return (0.0 /
 cash when the champion has no mark on either day). Picks are daily.
 
+Switch hysteresis: yesterday's champion is passed to thompson_pick as the
+incumbent (the first pick after warmup has none), so the champion only
+changes when a challenger's draw clears the incumbent's draw by
+--hysteresis incumbent posterior stds. The incumbent is by construction
+prior information — it was picked on data through t-2 — so the
+no-lookahead rule is untouched. --hysteresis 0 reproduces the slice-4
+plain highest-draw replay.
+
 The report compares CAGR / Sharpe / maxDD (backtest_fleet.perf, same
 formulas) for: the meta-portfolio, the best and worst single strategy in
 hindsight, the daily-rebalanced equal-weight fleet, and the hold_*
@@ -76,7 +84,8 @@ def champion_segments(picks: list[dict]) -> list[dict]:
 
 def replay(books: dict, half_life: float = allocate.HALF_LIFE_DAYS,
            seed: int = 0, warmup: int = WARMUP_DAYS,
-           start: str | None = None, end: str | None = None) -> dict:
+           start: str | None = None, end: str | None = None,
+           hysteresis: float = allocate.HYSTERESIS) -> dict:
     """Day-by-day allocator replay over per-strategy daily book values.
 
     The trading calendar is the sorted union of candidate book dates inside
@@ -86,7 +95,8 @@ def replay(books: dict, half_life: float = allocate.HALF_LIFE_DAYS,
     the past, so that is not lookahead), RNG-keyed by day t's date and
     `seed`. The meta-portfolio compounds the champion's t-1 -> t return;
     the equal-weight curve compounds the mean return of every candidate
-    with marks on both days (daily rebalanced).
+    with marks on both days (daily rebalanced). Yesterday's champion is
+    day t's incumbent for switch hysteresis (None for the first pick).
     """
     cands = candidate_books(books)
     hists = {n: sorted(b["history"], key=lambda h: h["date"])
@@ -113,8 +123,11 @@ def replay(books: dict, half_life: float = allocate.HALF_LIFE_DAYS,
                 p += 1
             ptr[n] = p
         trunc = {n: {"history": hists[n][:ptr[n]]} for n in hists}
+        incumbent = picks[-1]["champion"] if picks else None
         champ = allocate.thompson_pick(trunc, day, seed=seed,
-                                       half_life=half_life)["champion"]
+                                       half_life=half_life,
+                                       incumbent=incumbent,
+                                       hysteresis=hysteresis)["champion"]
         picks.append({"date": day, "champion": champ})
 
         v_prev, v_now = vals[champ].get(prev), vals[champ].get(day)
@@ -132,7 +145,8 @@ def replay(books: dict, half_life: float = allocate.HALF_LIFE_DAYS,
 
     segments = champion_segments(picks)
     return {"start": calendar[warmup], "end": calendar[-1], "warmup": warmup,
-            "half_life": half_life, "seed": seed, "picks": picks,
+            "half_life": half_life, "seed": seed, "hysteresis": hysteresis,
+            "picks": picks,
             "segments": segments,
             "switches": max(len(segments) - 1, 0),
             "meta_history": meta_hist, "ew_history": ew_hist}
@@ -194,7 +208,8 @@ def print_report(result: dict, rows: dict, args) -> None:
             "cadence": "daily",
             "start": result["start"], "end": result["end"],
             "warmup": result["warmup"], "half_life": args.half_life,
-            "seed": args.seed, "picks": len(result["picks"]),
+            "seed": args.seed, "hysteresis": result["hysteresis"],
+            "picks": len(result["picks"]),
             "switches": result["switches"],
             "champion_days": {n: champion_days[n]
                               for n in sorted(champion_days)},
@@ -203,7 +218,7 @@ def print_report(result: dict, rows: dict, args) -> None:
         return
     print(f"allocator replay {result['start']} -> {result['end']} "
           f"(daily picks, half-life {args.half_life:g}d, seed {args.seed}, "
-          f"warmup {result['warmup']}d)")
+          f"hysteresis {result['hysteresis']:g}, warmup {result['warmup']}d)")
     print(CAVEAT)
     print(f"champion switches: {result['switches']} over "
           f"{len(result['picks'])} picks\n")
@@ -256,6 +271,9 @@ def main() -> None:
                          f"(default {allocate.HALF_LIFE_DAYS})")
     ap.add_argument("--seed", type=int, default=0,
                     help="seed offset folded into the date-seeded RNG scheme")
+    ap.add_argument("--hysteresis", type=float, default=allocate.HYSTERESIS,
+                    help="switch-hysteresis margin in incumbent posterior "
+                         f"stds (default {allocate.HYSTERESIS:g}; 0 disables)")
     ap.add_argument("--warmup", type=int, default=WARMUP_DAYS,
                     help="calendar days observed before the first pick "
                          f"(default {WARMUP_DAYS})")
@@ -271,6 +289,8 @@ def main() -> None:
         ap.error(f"--half-life must be > 0, got {args.half_life:g}")
     if args.warmup < 1:
         ap.error(f"--warmup must be >= 1, got {args.warmup}")
+    if args.hysteresis < 0:
+        ap.error(f"--hysteresis must be >= 0, got {args.hysteresis:g}")
     for flag, value in (("--start", args.start), ("--end", args.end)):
         if value is None:
             continue
@@ -299,7 +319,8 @@ def main() -> None:
 
     try:
         result = replay(books, half_life=args.half_life, seed=args.seed,
-                        warmup=args.warmup, start=args.start, end=args.end)
+                        warmup=args.warmup, start=args.start, end=args.end,
+                        hysteresis=args.hysteresis)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
