@@ -25,6 +25,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from market_calendar import early_close_minutes, is_market_holiday
+
 # Test seam: ORDER_GATE_ROOT overrides the repo root (unset in production).
 ROOT = Path(os.environ.get("ORDER_GATE_ROOT") or Path(__file__).parent.parent)
 
@@ -168,8 +170,12 @@ def main() -> None:
                   f"max_option_premium_usd {max_premium}")
 
     now = now_et()
+    if is_market_holiday(now.date()):
+        block(f"US market holiday ({now.date()})")
     minutes = now.hour * 60 + now.minute
-    if now.weekday() > 4 or not (9 * 60 + 30 <= minutes < 16 * 60):
+    # Half-days close early (13:00 ET); use that as the session upper bound.
+    close = early_close_minutes(now.date()) or (16 * 60)
+    if now.weekday() > 4 or not (9 * 60 + 30 <= minutes < close):
         block(f"outside regular market hours ({now:%a %H:%M} ET)")
 
     today = str(now.date())

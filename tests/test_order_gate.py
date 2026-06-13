@@ -179,6 +179,30 @@ def test_outside_market_hours_blocks(tmp_path, now):
     assert_blocked(result, "outside regular market hours")
 
 
+# 10'. weekday US market holiday at 10:30 ET -> block with the holiday message
+# (distinct from the generic "outside regular market hours"). 2026-06-19 is
+# Juneteenth, a Friday.
+def test_market_holiday_blocks(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_buy(),
+                      now="2026-06-19T10:30:00")
+    assert_blocked(result, "market holiday")
+
+
+# 10''. early-close half-day: an order at 14:00 ET on 2026-11-27 (day after
+# Thanksgiving, 13:00 close) is after the early close -> blocked as outside
+# regular market hours. An order at 11:00 ET that day is still allowed.
+def test_early_close_after_close_blocks(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_buy(),
+                      now="2026-11-27T14:00:00")
+    assert_blocked(result, "outside regular market hours")
+
+
+def test_early_close_before_close_allowed(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_buy(),
+                      now="2026-11-27T11:00:00")
+    assert result.returncode == 0, result.stderr
+
+
 # 11. second order same day -> block
 def test_second_order_same_day_blocks(tmp_path):
     state = dict(BASE_STATE, last_action={"date": "2026-06-10", "order_placed": True})
