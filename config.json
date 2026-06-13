@@ -4,8 +4,8 @@
   "dry_run": true,
   "position_fraction": 0.95,
   "max_order_usd": 550,
-  "max_option_premium_usd": 1500,
-  "max_option_contracts": 2,
+  "max_option_premium_usd": 500,
+  "max_option_contracts": 1,
   "kill_drawdown_pct": 15,
   "entry_rsi": 10.0,
   "scale_rsi": 5.0,
@@ -98,6 +98,15 @@
       "signal": "donchian_short",
       "params": {"entry_low": 20, "exit_high": 10, "sma_trend": 200,
                  "itm_pct": 0.02, "dte_min": 30, "dte_max": 60, "exit_dte": 10}
+    },
+    "opt_rsi2_call_xlf": {
+      "enabled": true,
+      "kind": "option",
+      "symbol": "XLF",
+      "right": "call",
+      "signal": "rsi2_long",
+      "params": {"sma_trend": 200, "sma_exit": 5, "entry_rsi": 10.0,
+                 "itm_pct": 0.04, "dte_min": 28, "dte_max": 45, "exit_dte": 7}
     }
   }
 }
