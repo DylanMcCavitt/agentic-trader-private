@@ -3,6 +3,15 @@
 # time window: only trade 15:30-15:58 ET on weekdays.
 set -euo pipefail
 cd "$(dirname "$0")"
+. scripts/timezone.sh
+
+host_tz="$(agentic_trader_detect_host_timezone)"
+if ! agentic_trader_is_eastern_timezone "$host_tz"; then
+  mkdir -p logs
+  reason="$(agentic_trader_timezone_requirement_reason)"
+  echo "$(date '+%F %T') WARN: host-TZ mismatch: refusing run; detected host timezone '$host_tz'. $reason" >> logs/runner.log
+  exit 0
+fi
 
 export TZ=America/New_York
 dow=$(date +%u) # 1=Mon

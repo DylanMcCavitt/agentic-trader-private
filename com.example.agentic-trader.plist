@@ -10,6 +10,7 @@
     <string>-lc</string>
     <string>/PATH/TO/agentic-trader/run.sh</string>
   </array>
+  <!-- launchd evaluates this schedule in machine-local time; install only on Eastern Time hosts. -->
   <key>StartCalendarInterval</key>
   <array>
     <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>45</integer></dict>

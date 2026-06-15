@@ -7,9 +7,10 @@
 # substituted in, writes it to ~/Library/LaunchAgents/, and loads it.
 # Idempotent: re-running unloads any existing copy first.
 #
-# Schedule: weekdays at 15:45 (machine-local time, intended as ET). Keep it
-# at 15:45 — the strategy computes its signal at ~3:45pm ET using the live
-# price as a provisional close, so the order can fill before the 4pm bell.
+# Schedule: weekdays at 15:45 machine-local time. launchd does not take a
+# timezone, so this installer refuses non-Eastern hosts. Keep it at 15:45 — the
+# strategy computes its signal at ~3:45pm ET using the live price as a
+# provisional close, so the order can fill before the 4pm bell.
 #
 # Migration: if you previously installed this agent under a different label,
 # remove it first: launchctl bootout "gui/$(id -u)/<old-label>" and delete
@@ -20,6 +21,17 @@ LABEL="com.example.agentic-trader"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE="$REPO_DIR/$LABEL.plist"
 TARGET="$HOME/Library/LaunchAgents/$LABEL.plist"
+. "$REPO_DIR/scripts/timezone.sh"
+
+HOST_TZ="$(agentic_trader_detect_host_timezone)"
+if ! agentic_trader_is_eastern_timezone "$HOST_TZ"; then
+  {
+    echo "ERROR: Refusing to install $LABEL."
+    echo "Detected host timezone: $HOST_TZ"
+    agentic_trader_timezone_requirement_reason
+  } >&2
+  exit 1
+fi
 
 mkdir -p "$HOME/Library/LaunchAgents" "$REPO_DIR/logs"
 
