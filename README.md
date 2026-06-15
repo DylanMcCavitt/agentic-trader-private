@@ -10,7 +10,7 @@ than by trusting the model. The trading strategy is a pluggable worked example
 
 ```mermaid
 flowchart TD
-    L["launchd — weekdays 15:45 ET"] --> R["run.sh — time-window + lock guard"]
+    L["launchd — weekdays 15:45 local (ET host)"] --> R["run.sh — time-window + lock guard"]
     R --> C["claude -p — executes TRADER.md"]
     C --> D["scripts/decide.py — deterministic signal"]
     D --> RV["Robinhood MCP — review order"]
@@ -34,10 +34,17 @@ flowchart TD
 
 ## How a run works
 
-`launchd` (com.example.agentic-trader, weekdays 15:45 ET) → `run.sh`
-(time-window + lock guard) → `claude -p` executes [`TRADER.md`](TRADER.md) →
+`launchd` (com.example.agentic-trader, weekdays 15:45 local on an ET host) →
+`run.sh` (time-window + lock guard) → `claude -p` executes [`TRADER.md`](TRADER.md) →
 `scripts/decide.py` computes the signal → Robinhood MCP reviews/places orders
 → broker-order reconciliation updates state → journal + macOS notification.
+
+> **Scheduler timezone requirement:** install and run this LaunchAgent only on
+> an Eastern Time host (`America/New_York` or an equivalent IANA/legacy ET zone).
+> `launchd` `StartCalendarInterval` is evaluated in the Mac's machine-local timezone;
+> `run.sh` then enforces the 15:30–15:58 ET trading window. Non-ET installs are
+> refused, and a non-ET scheduled run logs a `WARN: host-TZ mismatch` entry to
+> `logs/runner.log` instead of looking like a normal outside-window skip.
 
 The model never decides *what* to trade. It orchestrates: fetch a quote,
 check the position, call the decision script, place (or not place) one order,
@@ -156,9 +163,10 @@ Dependencies are managed by a root `pyproject.toml` + committed `uv.lock`
 builds the env; `uv run scripts/<x>.py` resolves against the project env
 automatically.
 
-- Install the scheduler: `bash scripts/install-launchd.sh` — substitutes this
-  repo's path into `com.example.agentic-trader.plist`, installs it to
-  `~/Library/LaunchAgents/`, and loads it. Safe to re-run.
+- Install the scheduler from an Eastern Time host only: `bash scripts/install-launchd.sh`
+  — substitutes this repo's path into `com.example.agentic-trader.plist`,
+  installs it to `~/Library/LaunchAgents/`, and loads it. The installer refuses
+  non-ET hosts because `launchd` schedules in machine-local time. Safe to re-run.
 - The weekday 15:45 schedule is intentional: the signal is computed at
   ~3:45pm ET using the live price as a provisional close, so orders can fill
   before the 4pm close. Don't change it without revisiting the strategy.
@@ -195,8 +203,8 @@ automatically.
 
 - Pause: `launchctl bootout gui/$UID/com.example.agentic-trader`
 - Resume: `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.example.agentic-trader.plist`
-- The Mac must be awake at 3:45pm ET; launchd fires a missed run on wake but
-  `run.sh` skips it outside 15:30–15:58 ET.
+- The Mac must be configured for Eastern Time and awake at 3:45pm ET; launchd
+  fires a missed run on wake but `run.sh` skips it outside 15:30–15:58 ET.
 - Kill-switch reset: after a drawdown halt, set `halt: false` in
   `state/state.json` by hand — nothing resets it automatically.
 - Re-auth: if the claude.ai Robinhood connector token expires, runs will
