@@ -93,6 +93,19 @@ def test_option_close_at_zero_books_total_loss():
     assert b["trades"][0]["ret"] == pytest.approx(-1.0)
 
 
+def test_option_fee_affects_sizing_cash_pnl_and_ret():
+    c = {**CONTRACT, "fill": 10.0}
+    b = book(3000.0)
+    paper.open_option(b, c, 1.0, TODAY, fee_per_contract=1.0)
+    assert b["position"]["contracts"] == 2  # 3 x (1000 + fee) is unaffordable
+    assert b["cash"] == pytest.approx(998.0)
+    paper.close_option(b, 12.0, LATER, "exit signal", fee_per_contract=1.0)
+    assert b["cash"] == pytest.approx(3396.0)  # 998 + 2 * (1200 - 1)
+    trade = b["trades"][0]
+    assert trade["pnl"] == pytest.approx(396.0)
+    assert trade["ret"] == pytest.approx(round(2398 / 2002 - 1, 6))
+
+
 # --- mark + stats -----------------------------------------------------------
 
 def test_mark_is_idempotent_per_day():

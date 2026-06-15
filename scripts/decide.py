@@ -32,12 +32,8 @@ def rsi(series: pd.Series, period: int) -> pd.Series:
     return 100 - 100 / (1 + avg_gain / avg_loss)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--price", type=float, required=True, help="live price to use as today's provisional close")
-    ap.add_argument("--holding", choices=["true", "false"], required=True)
-    args = ap.parse_args()
-
+def compute_decision(price: float, holding: bool) -> dict:
+    """Return the strategy decision for a live price and holding state."""
     sym = CONFIG["symbol"]
     df = yf.download(
         sym,
@@ -54,13 +50,12 @@ def main() -> None:
     if len(px) < CONFIG["sma_trend"] + 5:
         print(json.dumps({"decision": "ERROR", "reason": f"only {len(px)} bars of history"}))
         sys.exit(1)
-    px.loc[pd.Timestamp(date.today())] = args.price
+    px.loc[pd.Timestamp(date.today())] = price
 
     sma_trend = px.rolling(CONFIG["sma_trend"]).mean().iloc[-1]
     sma_exit = px.rolling(CONFIG["sma_exit"]).mean().iloc[-1]
     rsi2 = rsi(px, 2).iloc[-1]
     close = px.iloc[-1]
-    holding = args.holding == "true"
 
     if holding:
         decision = "SELL" if close > sma_exit else "HOLD"
@@ -75,12 +70,20 @@ def main() -> None:
             reason = (f"close {close:.2f} vs SMA{CONFIG['sma_trend']} {sma_trend:.2f}, "
                       f"RSI2 {rsi2:.1f} (need < {CONFIG['entry_rsi']} and above trend)")
 
-    print(json.dumps({
+    return {
         "date": str(date.today()), "symbol": sym, "price": round(close, 2),
         "rsi2": round(float(rsi2), 2), "sma_trend": round(float(sma_trend), 2),
         "sma_exit": round(float(sma_exit), 2), "holding": holding,
         "decision": decision, "reason": reason,
-    }))
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--price", type=float, required=True, help="live price to use as today's provisional close")
+    ap.add_argument("--holding", choices=["true", "false"], required=True)
+    args = ap.parse_args()
+    print(json.dumps(compute_decision(args.price, args.holding == "true")))
 
 
 if __name__ == "__main__":

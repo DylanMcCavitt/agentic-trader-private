@@ -4,6 +4,8 @@
   "dry_run": true,
   "position_fraction": 0.95,
   "max_order_usd": 550,
+  "price_tolerance_pct": 2.0,
+  "quote_max_age_sec": 900,
   "max_option_premium_usd": 1500,
   "max_option_contracts": 2,
   "kill_drawdown_pct": 15,

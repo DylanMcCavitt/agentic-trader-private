@@ -119,12 +119,14 @@ def run_option(name: str, spec: dict, book: dict, df: pd.DataFrame,
     sig = SIGNALS[spec["signal"]](df, p)
     spot = float(df["Close"].iloc[-1])
     action, detail, premium = "NONE", "", None
+    option_fee = pcfg.get("option_fee_per_contract", paper.DEFAULT_OPTION_FEE_PER_CONTRACT)
     pos = book["position"]
     if pos:
         if oc.is_expired(pos, today_d):
             premium = settle_premium(pos, df)
             action = "SETTLE"
-            detail = paper.close_option(book, premium, today, "expired, intrinsic")
+            detail = paper.close_option(book, premium, today, "expired, intrinsic",
+                                        fee_per_contract=option_fee)
         else:
             premium = oc.mark_contract(pos, pcfg["option_spread_take"])
             if oc.near_expiry(pos, today_d, p["exit_dte"]) or sig["exit"]:
@@ -135,7 +137,8 @@ def run_option(name: str, spec: dict, book: dict, df: pd.DataFrame,
                     premium = round(oc.intrinsic(pos, spot), 2)
                     reason += ", no chain quote, intrinsic"
                 action = "CLOSE"
-                detail = paper.close_option(book, premium, today, reason)
+                detail = paper.close_option(book, premium, today, reason,
+                                            fee_per_contract=option_fee)
                 premium = None
             else:
                 action = "HOLD"
@@ -145,10 +148,11 @@ def run_option(name: str, spec: dict, book: dict, df: pd.DataFrame,
         if contract is None:
             detail = "entry signal but no contract in DTE window / no quote"
         else:
-            filled = paper.open_option(book, contract, pcfg["option_alloc"], today)
+            filled = paper.open_option(book, contract, pcfg["option_alloc"], today,
+                                       fee_per_contract=option_fee)
             if filled is None:
                 detail = (f"entry signal but 1 contract "
-                          f"(~${contract['fill'] * 100:.0f}) exceeds book cash")
+                          f"(~${contract['fill'] * 100 + option_fee:.0f}) exceeds book cash")
             else:
                 action, detail = "OPEN", filled
                 premium = contract["fill"]

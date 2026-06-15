@@ -30,6 +30,8 @@ BASE_CONFIG = {
     "account_number": "REPLACE_ME",
     "dry_run": False,
     "max_order_usd": 500,
+    "price_tolerance_pct": 2.0,
+    "quote_max_age_sec": 900,
 }
 BASE_STATE = {
     "hwm": 0,
@@ -77,7 +79,25 @@ def valid_buy(**overrides):
     return order
 
 
-def run_gate(root, order, *, now=MARKET_OPEN_NOW, tool_name=ORDER_TOOL):
+_FRESH_QUOTE = object()
+
+
+def run_gate(root, order, *, now=MARKET_OPEN_NOW, tool_name=ORDER_TOOL, quote=_FRESH_QUOTE):
+    # In production scripts/decide_with_quote.py writes state.last_quote before
+    # any order, and the gate validates freshness + price tolerance against it.
+    # Mirror that here: by default stamp a fresh quote (ts = now) so existing
+    # paths pass the check; quote-specific tests pass an explicit dict or None.
+    if quote is _FRESH_QUOTE:
+        quote = {"symbol": "SPY", "price": 100.0, "ts": now}
+    if quote is not None:
+        state_path = root / "state" / "state.json"
+        try:
+            state = json.loads(state_path.read_text())
+        except (FileNotFoundError, ValueError):
+            state = None
+        if isinstance(state, dict):
+            state["last_quote"] = quote
+            state_path.write_text(json.dumps(state))
     env = os.environ.copy()
     env["ORDER_GATE_ROOT"] = str(root)
     env["ORDER_GATE_NOW"] = now
@@ -352,3 +372,69 @@ def test_valid_sell_allowed(tmp_path):
     result = run_gate(make_root(tmp_path), order)
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
+
+
+# 16. state.last_quote validation (written by scripts/decide_with_quote.py).
+def test_missing_last_quote_blocks(tmp_path):
+    # No quote stamped and BASE_STATE has none -> fail closed.
+    result = run_gate(make_root(tmp_path), valid_buy(), quote=None)
+    assert_blocked(result, "last_quote missing")
+
+
+def test_quote_symbol_mismatch_blocks(tmp_path):
+    quote = {"symbol": "QQQ", "price": 100.0, "ts": MARKET_OPEN_NOW}
+    result = run_gate(make_root(tmp_path), valid_buy(), quote=quote)
+    assert_blocked(result, "does not match configured symbol")
+
+
+def test_stale_quote_blocks(tmp_path):
+    # 30 min before now, default max age 900s -> stale.
+    quote = {"symbol": "SPY", "price": 100.0, "ts": "2026-06-10T10:00:00"}
+    result = run_gate(make_root(tmp_path), valid_buy(), quote=quote)
+    assert_blocked(result, "stale")
+
+
+def test_future_quote_blocks(tmp_path):
+    quote = {"symbol": "SPY", "price": 100.0, "ts": "2026-06-10T11:00:00"}
+    result = run_gate(make_root(tmp_path), valid_buy(), quote=quote)
+    assert_blocked(result, "in the future")
+
+
+def test_order_price_within_quote_tolerance_allowed(tmp_path):
+    quote = {"symbol": "SPY", "price": 100.0, "ts": MARKET_OPEN_NOW}
+    # limit_price 1.5% above the quote, within the 2% tolerance -> allowed.
+    result = run_gate(make_root(tmp_path), valid_buy(limit_price=101.5), quote=quote)
+    assert result.returncode == 0, result.stderr
+
+
+def test_order_price_outside_quote_tolerance_blocks(tmp_path):
+    quote = {"symbol": "SPY", "price": 100.0, "ts": MARKET_OPEN_NOW}
+    # 5% above the quote, beyond the 2% tolerance -> block.
+    result = run_gate(make_root(tmp_path), valid_buy(limit_price=105.0), quote=quote)
+    assert_blocked(result, "deviates")
+
+
+def test_quote_tolerance_and_age_are_config_driven(tmp_path):
+    config = dict(BASE_CONFIG, price_tolerance_pct=0.5, quote_max_age_sec=60)
+    quote = {"symbol": "SPY", "price": 100.0, "ts": MARKET_OPEN_NOW}
+    # 1% deviation now exceeds the tightened 0.5% tolerance.
+    result = run_gate(make_root(tmp_path, config=config),
+                      valid_buy(limit_price=101.0), quote=quote)
+    assert_blocked(result, "deviates")
+
+
+def test_quote_validation_uses_default_age_when_config_key_missing(tmp_path):
+    config = {k: v for k, v in BASE_CONFIG.items() if k != "quote_max_age_sec"}
+    # 20 min old, beyond the 900s default -> stale.
+    quote = {"symbol": "SPY", "price": 100.0, "ts": "2026-06-10T10:10:00"}
+    result = run_gate(make_root(tmp_path, config=config), valid_buy(), quote=quote)
+    assert_blocked(result, "stale")
+
+
+def test_quote_validation_uses_default_tolerance_when_config_key_missing(tmp_path):
+    config = {k: v for k, v in BASE_CONFIG.items() if k != "price_tolerance_pct"}
+    quote = {"symbol": "SPY", "price": 100.0, "ts": MARKET_OPEN_NOW}
+    # 3% deviation, beyond the 2% default -> block.
+    result = run_gate(make_root(tmp_path, config=config),
+                      valid_buy(limit_price=103.0), quote=quote)
+    assert_blocked(result, "deviates")
