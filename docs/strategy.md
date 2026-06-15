@@ -7,8 +7,12 @@ deliberately simple and replaceable — the harness's guardrails (see the
 ## Decision interface
 
 ```
-uv run scripts/decide.py --price <live_price> --holding <true|false>
+uv run scripts/decide_with_quote.py --quote-json '<broker quote JSON>' --holding <true|false>
 ```
+
+The wrapper persists the broker quote to `state.last_quote` and feeds the
+quote price into `scripts/decide.py`. `decide.py` can still be run directly
+for tests/backtests with `--price`, but live runs should use the wrapper.
 
 Output is a single JSON object:
 
@@ -31,10 +35,11 @@ its own market opinion. To plug in a different strategy, replace
   buy ~95% of buying power (`position_fraction`), as a dollar-sized market
   order (fractional), capped at `max_order_usd`.
 - **Exit**: close > 5-day SMA → sell the full position, market order.
-- **Timing**: signals are computed at ~3:45pm ET using the live price as a
-  provisional close, so orders can fill before the 4pm close. `decide.py`
-  fetches daily history through the prior session and appends `--price` as
-  today's bar.
+- **Timing**: signals are computed at ~3:45pm ET using the broker quote as a
+  provisional close, so orders can fill before the 4pm close. The quote
+  wrapper persists that price/timestamp for the order gate; `decide.py`
+  fetches daily history through the prior session and appends the quote price
+  as today's bar.
 
 Parameters (`entry_rsi`, `sma_trend`, `sma_exit`, `slippage_bps`, sizing)
 live in `config.json` and are shared between `decide.py` and `backtest.py` —

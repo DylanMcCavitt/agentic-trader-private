@@ -6,6 +6,9 @@ functions over plain dicts — all I/O lives in run_strategies.py.
 """
 
 
+DEFAULT_OPTION_FEE_PER_CONTRACT = 0.65
+
+
 def new_book(starting_cash: float, today: str) -> dict:
     return {
         "cash": starting_cash, "starting_cash": starting_cash, "started": today,
@@ -42,41 +45,54 @@ def close_equity(book: dict, price: float, slip_bps: float, today: str,
     return f"sold {pos['shares']:.4f} {pos['symbol']} @ {fill:.2f} ({reason})"
 
 
-def open_option(book: dict, contract: dict, alloc: float, today: str) -> str | None:
-    """Buy floor(cash x alloc / premium) contracts, at least 1 if affordable.
+def open_option(book: dict, contract: dict, alloc: float, today: str,
+                fee_per_contract: float = 0.0) -> str | None:
+    """Buy floor(cash x alloc / premium+fee) contracts, at least 1 if affordable.
     Returns None (no fill) when even one contract exceeds the book's cash."""
-    per_contract = contract["fill"] * 100
+    fee = float(fee_per_contract or 0.0)
+    per_contract = contract["fill"] * 100 + fee
+    if per_contract <= 0:
+        return None
     n = int(book["cash"] * alloc / per_contract)
     if n < 1 and per_contract <= book["cash"]:
         n = 1
     if n < 1:
         return None
     book["cash"] -= n * per_contract
-    book["position"] = {"kind": "option", "contracts": n,
-                        "entry_premium": contract["fill"], "entry_date": today,
-                        "underlying": contract["underlying"],
-                        "right": contract["right"],
-                        "strike": contract["strike"], "expiry": contract["expiry"]}
+    pos = {"kind": "option", "contracts": n,
+           "entry_premium": contract["fill"], "entry_date": today,
+           "entry_fee_per_contract": fee,
+           "underlying": contract["underlying"],
+           "right": contract["right"],
+           "strike": contract["strike"], "expiry": contract["expiry"]}
+    for key in ("entry_iv", "entry_dte"):
+        if key in contract:
+            pos[key] = contract[key]
+    book["position"] = pos
     return (f"bought {n}x {contract['underlying']} {contract['expiry']} "
             f"{contract['strike']:g}{contract['right'][0].upper()} @ {contract['fill']:.2f}")
 
 
-def close_option(book: dict, premium: float, today: str, reason: str) -> str:
+def close_option(book: dict, premium: float, today: str, reason: str,
+                 fee_per_contract: float = 0.0) -> str:
     pos = book["position"]
-    proceeds = pos["contracts"] * premium * 100
-    cost = pos["contracts"] * pos["entry_premium"] * 100
+    contracts = pos["contracts"]
+    close_fee = float(fee_per_contract or 0.0)
+    gross_proceeds = contracts * premium * 100
+    proceeds = gross_proceeds - contracts * close_fee
+    cost = contracts * (pos["entry_premium"] * 100
+                        + float(pos.get("entry_fee_per_contract", 0.0)))
     book["cash"] += proceeds
     book["trades"].append({
         "opened": pos["entry_date"], "closed": today,
-        "detail": f"{pos['contracts']}x {pos['underlying']} {pos['expiry']} "
+        "detail": f"{contracts}x {pos['underlying']} {pos['expiry']} "
                   f"{pos['strike']:g}{pos['right'][0].upper()} "
                   f"{pos['entry_premium']:.2f} -> {premium:.2f} ({reason})",
         "pnl": round(proceeds - cost, 2),
-        "ret": round(premium / pos["entry_premium"] - 1, 6)
-               if pos["entry_premium"] else 0.0,
+        "ret": round(proceeds / cost - 1, 6) if cost else 0.0,
     })
     book["position"] = None
-    return (f"sold {pos['contracts']}x {pos['underlying']} "
+    return (f"sold {contracts}x {pos['underlying']} "
             f"{pos['strike']:g}{pos['right'][0].upper()} @ {premium:.2f} ({reason})")
 
 

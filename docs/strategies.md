@@ -33,9 +33,11 @@ supports (Level 2; no spreads) and what `scripts/option_gate.py` would allow
 live. All ten are long-premium/long-equity: max loss is the book.
 
 Option contracts are picked and marked via yfinance chains (~15-minute
-delayed quotes — fine for paper). Fills charge `slippage_bps` on equities
-and `option_spread_take` × half-spread on options; an expired option that
-was never closed settles at intrinsic value.
+delayed quotes — fine for paper). Fills charge `slippage_bps` on equities,
+`option_spread_take` × half-spread on options, and
+`option_fee_per_contract` per option open/close (defaults to $0.65 when the
+paper config omits it); an expired option that was never closed settles at
+intrinsic value.
 
 ## Equity strategies
 
@@ -76,12 +78,14 @@ uv run scripts/backtest_fleet.py --start 2015-01-01
 Replays the exact vectorized signals through the same fill math as the
 paper engine (`scripts/paper.py`), one $10k book per strategy, with
 buy-and-hold rows for context. Equity rows are as trustworthy as
-`scripts/backtest.py`; **options rows are an approximation** — synthetic
-contracts at the configured moneyness/DTE, Black-Scholes priced from 21d
-EWMA realized vol × `--iv-premium` (default 1.15), `--opt-slip-pct`
-(default 1.5%) per side. No real IV surface means vol-crush after
-mean-reversion entries is underestimated, so treat options results as
-optimistic direction, not truth. Chain-accurate options backtesting needs
+`scripts/backtest.py`; **options rows are approximate and printed unranked** —
+synthetic contracts at configured moneyness and `dte_min`,
+Black-Scholes-Merton priced from 21d EWMA realized vol × `--iv-premium`
+(default 1.15), dividend yields (`--div-yields`), an exit IV cap
+(`--exit-iv-haircut`, default 25%), `--opt-slip-pct` (default 1.5%) per side,
+and `--option-fee-per-contract` (default $0.65) per side. No real IV surface
+means vol-crush/path effects are still approximate; treat option results as
+directional feel, not truth. Chain-accurate options backtesting needs
 historical chain data (e.g. QuantConnect/LEAN).
 
 Indicators warm up on data before `--start`; trading begins at `--start`.

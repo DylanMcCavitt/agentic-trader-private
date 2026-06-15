@@ -32,19 +32,30 @@ def _fill(row, side: str, spread_take: float) -> float | None:
     return mid
 
 
+def nearest_eligible_expiry(expiries, today: date, dte_min: int,
+                            dte_max: int) -> str | None:
+    """Earliest expiry whose DTE is inside [dte_min, dte_max].
+
+    yfinance returns ISO date strings; accepting date objects keeps the helper
+    useful for synthetic backtest expiries too.
+    """
+    eligible = []
+    for expiry in expiries or ():
+        exp_date = expiry if isinstance(expiry, date) else date.fromisoformat(str(expiry))
+        dte = (exp_date - today).days
+        if dte_min <= dte <= dte_max:
+            eligible.append(exp_date.isoformat())
+    return min(eligible) if eligible else None
+
+
 def pick_contract(symbol: str, right: str, spot: float, p: dict, today: date,
                   spread_take: float) -> dict | None:
     """Nearest expiry inside [dte_min, dte_max], strike nearest itm_pct in the
     money. Returns the contract plus a buy-side fill price, or None."""
     tkr = yf.Ticker(symbol)
-    expiries = []
-    for d in tkr.options or ():
-        dte = (date.fromisoformat(d) - today).days
-        if p["dte_min"] <= dte <= p["dte_max"]:
-            expiries.append(d)
-    if not expiries:
+    expiry = nearest_eligible_expiry(tkr.options, today, p["dte_min"], p["dte_max"])
+    if expiry is None:
         return None
-    expiry = min(expiries)
     chain = tkr.option_chain(expiry)
     table = chain.calls if right == "call" else chain.puts
     if table.empty:

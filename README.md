@@ -10,8 +10,9 @@ than by trusting the model. The trading strategy is a pluggable worked example
 
 `launchd` (com.example.agentic-trader, weekdays 15:45 ET) → `run.sh`
 (time-window + lock guard) → `claude -p` executes [`TRADER.md`](TRADER.md) →
-`scripts/decide.py` computes the signal → Robinhood MCP reviews/places orders
-→ journal + state + macOS notification.
+`scripts/decide_with_quote.py` persists the broker quote and computes the
+signal via `scripts/decide.py` → Robinhood MCP reviews/places orders →
+journal + state + macOS notification.
 
 The model never decides *what* to trade. It orchestrates: fetch a quote,
 check the position, call the decision script, place (or not place) one order,
@@ -33,7 +34,9 @@ alone. Eight guardrail layers, all deterministic:
    harness runs *before* the tool call executes — the model cannot skip it,
    argue with it, or edit it (the settings only allow writes to `state/` and
    `logs/`). Exit 2 blocks the order; it also **fails closed**: a missing or
-   unparsable `config.json` or `state/state.json` blocks outright.
+   unparsable `config.json` or `state/state.json` blocks outright. It also
+   validates orders against the persisted broker quote used for the decision,
+   blocking stale quotes or price deviations beyond the configured tolerance.
 3. **Symbol + account whitelist.** Orders for any symbol other than the one
    configured, or any account other than the configured agentic account, are
    blocked. The real account number lives only in untracked
@@ -78,11 +81,15 @@ configuration the agent cannot modify.
 
 ## The strategy is pluggable
 
-The agent consumes a single decision interface:
+The agent consumes a single decision interface through a quote-persisting
+wrapper:
 
 ```
-uv run scripts/decide.py --price <live_price> --holding <true|false>
+uv run scripts/decide_with_quote.py --quote-json '<broker quote JSON>' --holding <true|false>
 ```
+
+The wrapper records `state.last_quote = {symbol, price, ts}` and feeds that
+same price into `scripts/decide.py`.
 
 → decision JSON: `{"decision": "BUY" | "SELL" | "HOLD" | "NONE", "reason": ...}`
 
@@ -139,7 +146,9 @@ automatically.
 - `TRADER.md` — the exact procedure the headless session follows
 - `scripts/order_gate.py` / `scripts/option_gate.py` — the deterministic
   order gates (PreToolUse hooks) for equity and option orders
-- `scripts/decide.py` — the decision interface implementation
+- `scripts/decide_with_quote.py` — live decision wrapper that persists the
+  broker quote used for the signal
+- `scripts/decide.py` — the strategy decision implementation
 - `scripts/backtest.py` — backtest harness (same indicator math as decide.py)
 - `scripts/run_strategies.py` — the paper fleet: evaluates all 10 candidate
   strategies into per-strategy paper books (`state/paper.json`,
@@ -152,7 +161,7 @@ automatically.
   real account number — see [`docs/config.md`](docs/config.md) for the full
   reference; `config.example.json` is a copyable starting point
 - `state/state.json` — untracked live state: high-water mark, halt flag,
-  last action
+  last action, last broker quote
 - `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
 
 ## Ops

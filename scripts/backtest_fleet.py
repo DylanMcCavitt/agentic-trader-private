@@ -2,6 +2,9 @@
 
 Usage: uv run scripts/backtest_fleet.py [--start 2005-01-01] [--end ...]
                                         [--iv-premium 1.15] [--opt-slip-pct 0.015]
+                                        [--exit-iv-haircut 0.25]
+                                        [--option-fee-per-contract 0.65]
+                                        [--div-yields '{"SPY":0.012}']
                                         [--rate 0.04] [--json]
 
 Replays the exact vectorized signals the paper fleet trades
@@ -9,11 +12,11 @@ Replays the exact vectorized signals the paper fleet trades
 (scripts/paper.py), one $10k book per strategy, close-to-close fills.
 
 Options strategies are an APPROXIMATION: there is no free historical option
-chain, so contracts are synthesized at the configured moneyness/DTE and
-priced with Black-Scholes using 21d EWMA realized vol x --iv-premium, with
---opt-slip-pct charged per side. That misses real IV dynamics (especially
-vol crush after mean-reversion entries) — treat options rows as directional
-feel, not truth. For chain-accurate options backtests use QuantConnect/LEAN.
+chain, so contracts are synthesized at the configured moneyness and dte_min,
+priced with Black-Scholes-Merton using 21d EWMA realized vol x --iv-premium,
+continuous dividend yields, --exit-iv-haircut, --opt-slip-pct, and option fees.
+That still misses real IV surfaces — treat options rows as directional feel,
+not truth. For chain-accurate options backtests use QuantConnect/LEAN.
 
 Indicators warm up on data before --start; trading begins at --start.
 """
@@ -31,11 +34,29 @@ sys.path.insert(0, str(Path(__file__).parent))
 import paper
 from strategies import SIGNAL_SERIES, signals
 from strategies.common import fetch_history
-from strategies.contracts import intrinsic
+from strategies.contracts import intrinsic, nearest_eligible_expiry
 from strategies.pricing import bs_price
 
 ROOT = Path(__file__).parent.parent
 CONFIG = json.loads((ROOT / "config.json").read_text())
+DEFAULT_DIV_YIELDS = {"SPY": 0.012, "QQQ": 0.006, "IWM": 0.013}
+
+
+def parse_div_yields(raw: str | None) -> dict:
+    yields = dict(DEFAULT_DIV_YIELDS)
+    if raw:
+        override = json.loads(raw)
+        if not isinstance(override, dict):
+            raise ValueError("--div-yields must be a JSON object")
+        yields.update({str(k).upper(): float(v) for k, v in override.items()})
+    return yields
+
+
+def option_exit_vol(current_iv: float, entry_iv: float,
+                    exit_iv_haircut: float) -> float:
+    haircut = min(max(exit_iv_haircut, 0.0), 1.0)
+    cap = max(0.0, entry_iv * (1 - haircut))
+    return min(max(0.0, current_iv), cap)
 
 
 def realized_vol(px: pd.Series, span: int = 21) -> pd.Series:
@@ -112,7 +133,9 @@ def backtest_rotation(spec: dict, dfs: dict, pcfg: dict,
 
 def backtest_option(spec: dict, df: pd.DataFrame, pcfg: dict,
                     start: pd.Timestamp, iv_premium: float, opt_slip: float,
-                    r: float) -> dict:
+                    r: float, q: float = 0.0, exit_iv_haircut: float = 0.25,
+                    option_fee_per_contract: float = (
+                        paper.DEFAULT_OPTION_FEE_PER_CONTRACT)) -> dict:
     p = spec["params"]
     right = spec["right"]
     sig = SIGNAL_SERIES[spec["signal"]](df, p)
@@ -133,28 +156,40 @@ def backtest_option(spec: dict, df: pd.DataFrame, pcfg: dict,
             expiry = date.fromisoformat(pos["expiry"])
             if d >= expiry:
                 paper.close_option(book, round(intrinsic(pos, S), 2), ds,
-                                   "expired, intrinsic")
+                                   "expired, intrinsic",
+                                   fee_per_contract=option_fee_per_contract)
             else:
-                t_years = (expiry - d).days / 365.25
-                prem = bs_price(S, pos["strike"], t_years, sg, r, right)
-                if (expiry - d).days <= p["exit_dte"] or bool(sig["exit"].iloc[i]):
-                    reason = ("dte stop" if (expiry - d).days <= p["exit_dte"]
-                              else "exit signal")
+                dte_left = (expiry - d).days
+                t_years = dte_left / 365.25
+                exit_iv = option_exit_vol(sg, float(pos.get("entry_iv", sg)),
+                                          exit_iv_haircut)
+                prem = bs_price(S, pos["strike"], t_years, exit_iv, r, right, q=q)
+                if dte_left <= p["exit_dte"] or bool(sig["exit"].iloc[i]):
+                    reason = "dte stop" if dte_left <= p["exit_dte"] else "exit signal"
                     paper.close_option(book, round(prem * (1 - opt_slip), 2),
-                                       ds, reason)
+                                       ds, reason,
+                                       fee_per_contract=option_fee_per_contract)
                 else:
                     premium_mark = prem
         elif bool(sig["entry"].iloc[i]) and sg > 0:
             strike = float(round(S * (1 - p["itm_pct"]) if right == "call"
                                  else S * (1 + p["itm_pct"])))
-            dte = (p["dte_min"] + p["dte_max"]) // 2
+            synthetic_expiry = str(d + timedelta(days=int(p["dte_min"])))
+            expiry = nearest_eligible_expiry([synthetic_expiry], d,
+                                             p["dte_min"], p["dte_max"])
+            if expiry is None:
+                paper.mark(book, ds)
+                continue
+            dte = (date.fromisoformat(expiry) - d).days
             t_years = dte / 365.25
-            fill = bs_price(S, strike, t_years, sg, r, right) * (1 + opt_slip)
+            fill = bs_price(S, strike, t_years, sg, r, right, q=q) * (1 + opt_slip)
             if fill > 0.05:
                 contract = {"underlying": spec["symbol"], "right": right,
-                            "strike": strike, "expiry": str(d + timedelta(days=dte)),
-                            "fill": round(fill, 2)}
-                if paper.open_option(book, contract, pcfg["option_alloc"], ds):
+                            "strike": strike, "expiry": expiry,
+                            "fill": round(fill, 2), "entry_iv": sg,
+                            "entry_dte": dte}
+                if paper.open_option(book, contract, pcfg["option_alloc"], ds,
+                                     fee_per_contract=option_fee_per_contract):
                     premium_mark = contract["fill"]
         paper.mark(book, ds, option_premium=premium_mark)
     return book
@@ -171,6 +206,34 @@ def buy_and_hold(symbol: str, df: pd.DataFrame, pcfg: dict,
     return book
 
 
+def _format_row(name: str, r: dict) -> str:
+    label = f"{name} (approx)" if r.get("approx") else name
+    win = f"{r['win_rate']:.0%}" if r["win_rate"] is not None else "-"
+    return (f"{label:<24} {r['years']:>5} {r['cagr']:>8.2%} {r['sharpe']:>6.2f} "
+            f"{r['max_dd']:>8.2%} {r['trades_yr']:>5.1f} {win:>5} "
+            f"{r['exposure']:>5.0%} {r['final']:>12,.0f}")
+
+
+def _is_ranked(row: dict) -> bool:
+    return row.get("ranked", not row.get("approx", False))
+
+
+def format_fleet_table(rows: dict) -> str:
+    header = (f"{'strategy':<24} {'years':>5} {'CAGR':>8} {'sharpe':>6} "
+              f"{'maxDD':>8} {'tr/yr':>5} {'win%':>5} {'expo':>5} {'final':>12}")
+    lines = [header, "-" * len(header)]
+    ranked = [(n, r) for n, r in rows.items() if _is_ranked(r)]
+    for name, row in sorted(ranked, key=lambda kv: -kv[1]["cagr"]):
+        lines.append(_format_row(name, row))
+    approx = [(n, r) for n, r in rows.items() if not _is_ranked(r)]
+    if approx:
+        lines.extend(["", "Approx option rows (unranked):", header,
+                      "-" * len(header)])
+        for name, row in approx:
+            lines.append(_format_row(name, row))
+    return "\n".join(lines)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--start", default="2005-01-01")
@@ -179,11 +242,23 @@ def main() -> None:
                     help="multiplier on realized vol to approximate IV")
     ap.add_argument("--opt-slip-pct", type=float, default=0.015,
                     help="per-side haircut on option fills")
+    ap.add_argument("--exit-iv-haircut", type=float, default=0.25,
+                    help="cap exit/mark IV at entry IV x (1 - haircut)")
+    ap.add_argument("--option-fee-per-contract", type=float,
+                    default=paper.DEFAULT_OPTION_FEE_PER_CONTRACT,
+                    help="per-contract commission/regulatory fee charged on open and close")
+    ap.add_argument("--div-yields", default=None,
+                    help=("JSON map of continuous dividend yields by underlying; "
+                          f"defaults {DEFAULT_DIV_YIELDS}"))
     ap.add_argument("--rate", type=float, default=0.04, help="risk-free rate")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     start = pd.Timestamp(args.start)
     pcfg = CONFIG["paper"]
+    try:
+        div_yields = parse_div_yields(args.div_yields)
+    except (TypeError, ValueError) as exc:
+        ap.error(str(exc))
 
     enabled = {n: s for n, s in CONFIG["strategies"].items() if s.get("enabled")}
     symbols = set()
@@ -204,29 +279,35 @@ def main() -> None:
             book = backtest_rotation(spec, {s: dfs[s] for s in spec["symbols"]},
                                      pcfg, start)
         elif spec["kind"] == "option":
+            q = div_yields.get(spec["symbol"].upper(), 0.0)
             book = backtest_option(spec, dfs[spec["symbol"]], pcfg, start,
-                                   args.iv_premium, args.opt_slip_pct, args.rate)
+                                   args.iv_premium, args.opt_slip_pct, args.rate,
+                                   q=q, exit_iv_haircut=args.exit_iv_haircut,
+                                   option_fee_per_contract=args.option_fee_per_contract)
         else:
             continue
-        rows[name] = perf(book)
+        row = perf(book)
+        row.update({"kind": spec["kind"], "approx": spec["kind"] == "option",
+                    "ranked": spec["kind"] != "option"})
+        if spec["kind"] == "option":
+            row.update({"div_yield": div_yields.get(spec["symbol"].upper(), 0.0),
+                        "exit_iv_haircut": args.exit_iv_haircut,
+                        "option_fee_per_contract": args.option_fee_per_contract})
+        rows[name] = row
     for s in sorted(symbols):
-        rows[f"hold_{s.lower()}"] = perf(buy_and_hold(s, dfs[s], pcfg, start))
+        row = perf(buy_and_hold(s, dfs[s], pcfg, start))
+        row.update({"kind": "buy_hold", "approx": False, "ranked": True})
+        rows[f"hold_{s.lower()}"] = row
 
     if args.json:
         print(json.dumps(rows, indent=2, default=float))
         return
     print(f"fleet backtest {args.start} -> {args.end or 'today'} "
-          f"(options approximated via Black-Scholes, iv_premium "
-          f"{args.iv_premium}, opt slip {args.opt_slip_pct:.1%}/side)\n")
-    header = (f"{'strategy':<24} {'years':>5} {'CAGR':>8} {'sharpe':>6} "
-              f"{'maxDD':>8} {'tr/yr':>5} {'win%':>5} {'expo':>5} {'final':>12}")
-    print(header)
-    print("-" * len(header))
-    for name, r in sorted(rows.items(), key=lambda kv: -kv[1]["cagr"]):
-        win = f"{r['win_rate']:.0%}" if r["win_rate"] is not None else "-"
-        print(f"{name:<24} {r['years']:>5} {r['cagr']:>8.2%} {r['sharpe']:>6.2f} "
-              f"{r['max_dd']:>8.2%} {r['trades_yr']:>5.1f} {win:>5} "
-              f"{r['exposure']:>5.0%} {r['final']:>12,.0f}")
+          f"(options approximated via Black-Scholes-Merton, iv_premium "
+          f"{args.iv_premium}, exit IV haircut {args.exit_iv_haircut:.0%}, "
+          f"opt slip {args.opt_slip_pct:.1%}/side, option fee "
+          f"${args.option_fee_per_contract:.2f}/contract/side)\n")
+    print(format_fleet_table(rows))
 
 
 if __name__ == "__main__":

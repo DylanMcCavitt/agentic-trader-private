@@ -16,9 +16,9 @@ The example is strict JSON (no comments); this file is the commentary.
   (`TRADER.md` via `scripts/load_config.py`) read `config.json` deep-merged
   with the untracked `config.local.json` (see
   [Local overrides](#local-overrides-configlocaljson)).
-- `scripts/decide.py` and `scripts/backtest.py` read the tracked
-  `config.json` directly — local overrides do **not** affect the strategy
-  math.
+- `scripts/decide.py`, `scripts/decide_with_quote.py`, and
+  `scripts/backtest.py` read the tracked `config.json` directly — local
+  overrides do **not** affect the strategy math.
 
 ## Knobs
 
@@ -74,6 +74,26 @@ The example is strict JSON (no comments); this file is the commentary.
   dedicated account's funding remains the ultimate loss cap.
 - **Default**: `550`.
 
+### `price_tolerance_pct`
+
+- **Purpose**: max allowed deviation between an order's explicit/implied
+  price and the broker quote persisted in `state.last_quote` by
+  `scripts/decide_with_quote.py`. The equity order gate blocks deviations
+  above this threshold.
+- **Units**: percent points.
+- **Safe range**: tight enough to catch stale/transposed prices while leaving
+  room for normal quote movement between review and placement.
+- **Default**: `2.0`.
+
+### `quote_max_age_sec`
+
+- **Purpose**: max age of `state.last_quote.ts` at order-gate time. If the
+  quote used for the decision is older than this, the gate blocks the order.
+- **Units**: seconds.
+- **Safe range**: a few minutes for liquid ETFs; increase only if scheduled
+  runs routinely pause between quote and order placement.
+- **Default**: `900` (15 minutes).
+
 ### `kill_drawdown_pct`
 
 - **Purpose**: kill-switch threshold. On each run, if portfolio
@@ -121,8 +141,8 @@ The example is strict JSON (no comments); this file is the commentary.
 
 - **Purpose**: the paper fleet — one entry per strategy:
   `{enabled, kind, symbol(s), signal, right?, params}`. Evaluated by
-  `scripts/run_strategies.py` only; the live trading path (decide.py + the
-  order gates) does not read it. See
+  `scripts/run_strategies.py` only; the live trading path
+  (`decide_with_quote.py` / `decide.py` + the order gates) does not read it. See
   [strategies.md](strategies.md) for every strategy and its params.
 - **Default**: 5 equity + 5 options strategies, all enabled.
 
@@ -189,8 +209,9 @@ How it works (`load_config` in `scripts/order_gate.py`):
   **deep-merged** over it: nested objects merge recursively, every other
   value in the local file replaces the tracked one.
 - The merged result is what the order gate and the trading run use.
-  `scripts/decide.py` and `scripts/backtest.py` read the tracked
-  `config.json` directly and ignore local overrides.
+  `scripts/decide.py`, `scripts/decide_with_quote.py`, and
+  `scripts/backtest.py` read the tracked `config.json` directly and ignore
+  local overrides.
 - The gate fails closed: if `config.local.json` is missing, or the merged
   `account_number` is empty or `"REPLACE_ME"`, every order is blocked.
 

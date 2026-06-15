@@ -10,10 +10,24 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 # Test seam: ORDER_GATE_ROOT overrides the repo root (unset in production).
 ROOT = Path(os.environ.get("ORDER_GATE_ROOT") or Path(__file__).parent.parent)
+ET = ZoneInfo("America/New_York")
+DEFAULT_PRICE_TOLERANCE_PCT = 2.0
+DEFAULT_QUOTE_MAX_AGE_SEC = 15 * 60
+ORDER_PRICE_FIELDS = (
+    "limit_price",
+    "stop_price",
+    "price",
+    "estimated_price",
+    "expected_price",
+    "implied_price",
+    "estimated_unit_price",
+    "quote_price",
+)
 
 
 def now_et() -> datetime:
@@ -46,6 +60,89 @@ def load_config(root: Path = ROOT) -> dict:
     if local.exists():
         cfg = deep_merge(cfg, json.loads(local.read_text()))
     return cfg
+
+
+def config_float(cfg: dict, key: str, default: float) -> float:
+    try:
+        value = float(cfg.get(key, default))
+    except (TypeError, ValueError):
+        block(f"{key} must be numeric")
+    if value <= 0:
+        block(f"{key} must be > 0")
+    return value
+
+
+def parse_positive_float(value: Any, name: str) -> float:
+    try:
+        number = float(str(value).replace("$", "").replace(",", ""))
+    except (TypeError, ValueError):
+        block(f"{name} {value!r} is not a number")
+    if number <= 0:
+        block(f"{name} {number!r} must be > 0")
+    return number
+
+
+def parse_quote_ts(value: Any) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        block("last_quote.ts missing or not a timestamp")
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        ts = datetime.fromisoformat(raw)
+    except ValueError:
+        block(f"last_quote.ts {value!r} is not ISO-8601")
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(ET).replace(tzinfo=None)
+    return ts
+
+
+def et_naive(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(ET).replace(tzinfo=None)
+    return value
+
+
+def order_reference_price(order: dict) -> float | None:
+    for field in ORDER_PRICE_FIELDS:
+        value = order.get(field)
+        if value not in (None, ""):
+            return parse_positive_float(value, field)
+    if order.get("dollar_amount") not in (None, "") and order.get("quantity") not in (None, ""):
+        dollars = parse_positive_float(order.get("dollar_amount"), "dollar_amount")
+        qty = parse_positive_float(order.get("quantity"), "quantity")
+        return dollars / qty
+    return None
+
+
+def validate_quote_freshness_and_price(cfg: dict, state: dict, order: dict, now: datetime) -> None:
+    quote = state.get("last_quote")
+    if not isinstance(quote, dict):
+        block("last_quote missing from state/state.json — run scripts/decide_with_quote.py before placing orders")
+
+    quote_symbol = quote.get("symbol")
+    if not isinstance(quote_symbol, str) or quote_symbol.upper() != str(cfg["symbol"]).upper():
+        block(f"last_quote symbol {quote_symbol!r} does not match configured symbol {cfg['symbol']}")
+
+    quote_price = parse_positive_float(quote.get("price"), "last_quote.price")
+    quote_ts = parse_quote_ts(quote.get("ts"))
+    max_age_sec = config_float(cfg, "quote_max_age_sec", DEFAULT_QUOTE_MAX_AGE_SEC)
+    age_sec = (et_naive(now) - quote_ts).total_seconds()
+    if age_sec < 0:
+        block(f"last_quote timestamp {quote.get('ts')!r} is in the future")
+    if age_sec > max_age_sec:
+        block(f"last_quote is stale ({age_sec:.0f}s old; max {max_age_sec:.0f}s)")
+
+    order_price = order_reference_price(order)
+    if order_price is None:
+        return
+    tolerance_pct = config_float(cfg, "price_tolerance_pct", DEFAULT_PRICE_TOLERANCE_PCT)
+    deviation_pct = abs(order_price - quote_price) / quote_price * 100
+    if deviation_pct > tolerance_pct:
+        block(
+            f"order price {order_price:.4f} deviates {deviation_pct:.2f}% from "
+            f"last_quote {quote_price:.4f} (max {tolerance_pct:.2f}%)"
+        )
 
 
 def main() -> None:
@@ -83,6 +180,9 @@ def main() -> None:
     if order.get("symbol") != cfg["symbol"]:
         block(f"symbol {order.get('symbol')!r} not whitelisted (only {cfg['symbol']})")
 
+    now = now_et()
+    validate_quote_freshness_and_price(cfg, state, order, now)
+
     side = order.get("side")
     if side == "buy":
         if order.get("type") != "market" or "dollar_amount" not in order:
@@ -96,7 +196,6 @@ def main() -> None:
     else:
         block(f"unknown side {side!r}")
 
-    now = now_et()
     if now.weekday() > 4 or not (9 <= now.hour < 16):
         block(f"outside regular market hours ({now:%a %H:%M} ET)")
 

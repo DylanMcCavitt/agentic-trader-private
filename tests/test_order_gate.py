@@ -30,6 +30,8 @@ BASE_CONFIG = {
     "account_number": "REPLACE_ME",
     "dry_run": False,
     "max_order_usd": 500,
+    "price_tolerance_pct": 2.0,
+    "quote_max_age_sec": 900,
 }
 BASE_STATE = {
     "hwm": 0,
@@ -37,6 +39,7 @@ BASE_STATE = {
     "halt_reason": None,
     "last_run": None,
     "last_action": None,
+    "last_quote": {"symbol": "SPY", "price": 100.0, "ts": "2026-06-10T10:25:00"},
     "position_opened": None,
 }
 _OMIT = object()
@@ -74,6 +77,12 @@ def valid_buy(**overrides):
     }
     order.update(overrides)
     return order
+
+
+def state_with_quote(*, price=100.0, ts="2026-06-10T10:25:00", symbol="SPY"):
+    state = dict(BASE_STATE)
+    state["last_quote"] = {"symbol": symbol, "price": price, "ts": ts}
+    return state
 
 
 def run_gate(root, order, *, now=MARKET_OPEN_NOW, tool_name=ORDER_TOOL):
@@ -136,6 +145,55 @@ def test_wrong_symbol_blocks(tmp_path):
     assert_blocked(result, "not whitelisted (only SPY)")
 
 
+# 5b. quote price/timestamp validation -> allow/block deterministically
+def test_order_price_within_quote_tolerance_allowed(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_buy(estimated_price=101.99))
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+
+
+def test_order_price_outside_quote_tolerance_blocks(tmp_path):
+    result = run_gate(make_root(tmp_path), valid_buy(estimated_price=102.01))
+    assert_blocked(result, "deviates 2.01% from last_quote")
+
+
+def test_stale_quote_blocks(tmp_path):
+    state = state_with_quote(ts="2026-06-10T10:14:59")
+    result = run_gate(make_root(tmp_path, state=state), valid_buy())
+    assert_blocked(result, "last_quote is stale")
+
+
+def test_missing_last_quote_blocks(tmp_path):
+    state = dict(BASE_STATE)
+    del state["last_quote"]
+    result = run_gate(make_root(tmp_path, state=state), valid_buy())
+    assert_blocked(result, "last_quote missing")
+
+
+def test_quote_tolerance_and_age_are_config_driven(tmp_path):
+    config = dict(BASE_CONFIG, price_tolerance_pct=3.0, quote_max_age_sec=1200)
+    state = state_with_quote(ts="2026-06-10T10:10:00")
+    result = run_gate(
+        make_root(tmp_path, config=config, state=state),
+        valid_buy(estimated_price=102.99),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+
+
+def test_quote_validation_uses_default_tolerance_when_config_key_missing(tmp_path):
+    config = {k: v for k, v in BASE_CONFIG.items() if k != "price_tolerance_pct"}
+    result = run_gate(make_root(tmp_path, config=config), valid_buy(estimated_price=102.01))
+    assert_blocked(result, "deviates 2.01% from last_quote")
+
+
+def test_quote_validation_uses_default_age_when_config_key_missing(tmp_path):
+    config = {k: v for k, v in BASE_CONFIG.items() if k != "quote_max_age_sec"}
+    state = state_with_quote(ts="2026-06-10T10:14:59")
+    result = run_gate(make_root(tmp_path, config=config, state=state), valid_buy())
+    assert_blocked(result, "last_quote is stale")
+
+
 # 6. buy that is not market / missing dollar_amount -> block
 @pytest.mark.parametrize(
     "order",
@@ -171,9 +229,13 @@ def test_unknown_side_blocks(tmp_path):
 
 
 # 10. outside regular market hours / weekend -> block
-@pytest.mark.parametrize("now", [SATURDAY_NOW, AFTER_HOURS_NOW], ids=["weekend", "after-hours"])
-def test_outside_market_hours_blocks(tmp_path, now):
-    result = run_gate(make_root(tmp_path), valid_buy(), now=now)
+@pytest.mark.parametrize(
+    ("now", "quote_ts"),
+    [(SATURDAY_NOW, "2026-06-13T10:25:00"), (AFTER_HOURS_NOW, "2026-06-10T17:25:00")],
+    ids=["weekend", "after-hours"],
+)
+def test_outside_market_hours_blocks(tmp_path, now, quote_ts):
+    result = run_gate(make_root(tmp_path, state=state_with_quote(ts=quote_ts)), valid_buy(), now=now)
     assert_blocked(result, "outside regular market hours")
 
 
