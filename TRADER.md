@@ -19,10 +19,13 @@ market opinion. All numbered steps are mandatory.
    (market holiday), journal "market closed", notify, stop.
 
 3. **Portfolio + kill switch.** Call `get_portfolio` for the account in the
-   merged config. If `total_value` > state `hwm`, update `hwm` in the state
-   file. If `total_value` < `hwm × (1 − kill_drawdown_pct/100)`: set
-   `halt: true` with `halt_reason` describing the drawdown, journal it, notify
-   with sound, stop. Place no orders.
+   merged config, then run:
+   `uv run scripts/drawdown_kill.py --total-value <portfolio total_value>`
+   The script owns the `hwm`, `halt`, and `halt_reason` state update. If the
+   script fails, emits invalid JSON, or omits required keys, journal the error,
+   notify, stop, and place no orders. If its JSON output has `halt: true`,
+   journal `halted: <halt_reason>`, notify with sound, stop, and place no
+   orders.
 
 4. **Position check.** Call `get_equity_positions`. holding = true iff there is
    a SPY position with quantity > 0.
@@ -74,10 +77,12 @@ market opinion. All numbered steps are mandatory.
     "BUY $510.43 notional of SPY (~0.70 sh at $727.08), market order" — never
     "BUY SPY market $510.43", which reads like a limit price.
 
-11. **Update state.** Write `state/state.json`: `last_run` (ISO timestamp),
-    `last_action` `{date, decision, order_placed: bool, order_id}`, and
-    `position_opened` (set to today's date on a fill of a buy; null after a
-    sell fills; otherwise leave unchanged).
+11. **Update state.** Re-read the current `state/state.json` first, then write
+    only `last_run` (ISO timestamp), `last_action` `{date, decision,
+    order_placed: bool, order_id}`, and `position_opened` (set to today's date
+    on a fill of a buy; null after a sell fills; otherwise leave unchanged).
+    Preserve the script-updated `hwm`, `halt`, `halt_reason`, and any unknown
+    fields.
 
 12. **Notify.** `osascript -e 'display notification "<decision + value>" with title "Agentic Trader"'`.
 
