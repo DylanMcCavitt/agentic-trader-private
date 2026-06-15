@@ -70,9 +70,22 @@ def marker_blocks_today(today: str) -> bool:
         block(f"gate marker unreadable ({type(exc).__name__}: {exc})")
 
 
-def write_marker(today: str) -> None:
+def write_marker(today: str, order: dict, allowed_at: datetime) -> None:
+    marker = {
+        "date": today,
+        "allowed_at": allowed_at.isoformat(),
+        "ref_id": order.get("ref_id"),
+        "account_number": order.get("account_number"),
+        "symbol": order.get("symbol"),
+        "side": order.get("side"),
+        "type": order.get("type"),
+    }
+    if "dollar_amount" in order:
+        marker["dollar_amount"] = order.get("dollar_amount")
+    if "quantity" in order:
+        marker["quantity"] = order.get("quantity")
     MARKER.parent.mkdir(parents=True, exist_ok=True)
-    MARKER.write_text(json.dumps({"date": today}))
+    MARKER.write_text(json.dumps(marker, indent=2) + "\n")
 
 
 def main() -> None:
@@ -86,6 +99,9 @@ def main() -> None:
     except Exception as exc:  # fail closed: a broken config must never allow
         block(f"cannot load config/state ({type(exc).__name__}: {exc})")
     order = payload.get("tool_input", {})
+    ref_id = order.get("ref_id")
+    if ref_id is None or not str(ref_id).strip():
+        block("ref_id is required and must be non-empty")
 
     # Fail closed on incomplete config: every required key must be present.
     # Existence, not truthiness — a missing dry_run must block (treating it as
@@ -156,7 +172,7 @@ def main() -> None:
 
     # Allow path: record the gate's own marker before exiting so the next
     # invocation today is capped without any model write to state.
-    write_marker(today)
+    write_marker(today, order, now)
     sys.exit(0)
 
 

@@ -66,6 +66,7 @@ def valid_open(**overrides):
         "quantity": "1",
         "type": "limit",
         "price": "5.00",
+        "ref_id": "OPT-REF-1",
         "legs": [{"option_id": "00000000-0000-0000-0000-000000000000",
                   "side": "buy", "position_effect": "open"}],
     }
@@ -128,6 +129,19 @@ def test_missing_config_local_blocks(tmp_path):
 def test_placeholder_account_blocks(tmp_path):
     root = make_root(tmp_path, local={"account_number": "REPLACE_ME"})
     assert_blocked(run_gate(root, valid_open()), "REPLACE_ME placeholder")
+
+
+def test_missing_ref_id_blocks(tmp_path):
+    order = valid_open()
+    del order["ref_id"]
+    result = run_gate(make_root(tmp_path), order)
+    assert_blocked(result, "ref_id is required")
+
+
+@pytest.mark.parametrize("ref_id", ["", "   "], ids=["empty", "blank"])
+def test_blank_ref_id_blocks(tmp_path, ref_id):
+    result = run_gate(make_root(tmp_path), valid_open(ref_id=ref_id))
+    assert_blocked(result, "ref_id is required")
 
 
 # 4. options not configured -> block (fail closed). Missing caps now trip the
@@ -272,7 +286,21 @@ def test_allow_writes_marker_and_blocks_second_order(tmp_path):
     first = run_gate(root, valid_open())
     assert first.returncode == 0, first.stderr
     marker = root / "state" / "gate_option.json"
-    assert json.loads(marker.read_text()) == {"date": "2026-06-10"}
+    assert json.loads(marker.read_text()) == {
+        "date": "2026-06-10",
+        "allowed_at": MARKET_OPEN_NOW,
+        "ref_id": "OPT-REF-1",
+        "account_number": FAKE_ACCOUNT,
+        "quantity": "1",
+        "type": "limit",
+        "price": "5.00",
+        "symbol": None,
+        "side": "buy",
+        "position_effect": "open",
+        "option_id": "00000000-0000-0000-0000-000000000000",
+        "legs": [{"option_id": "00000000-0000-0000-0000-000000000000",
+                  "side": "buy", "position_effect": "open"}],
+    }
     # the gate must NOT have written last_option_action into state.json
     state_after = json.loads((root / "state" / "state.json").read_text())
     assert state_after.get("last_option_action") is None

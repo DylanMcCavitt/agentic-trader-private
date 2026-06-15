@@ -83,9 +83,31 @@ def marker_blocks_today(today: str) -> bool:
         block(f"gate marker unreadable ({type(exc).__name__}: {exc})")
 
 
-def write_marker(today: str) -> None:
+def write_marker(today: str, order: dict, allowed_at: datetime) -> None:
+    legs = order.get("legs") or []
+    leg = legs[0] if legs and isinstance(legs[0], dict) else {}
+    marker = {
+        "date": today,
+        "allowed_at": allowed_at.isoformat(),
+        "ref_id": order.get("ref_id"),
+        "account_number": order.get("account_number"),
+        "quantity": order.get("quantity"),
+        "type": order.get("type"),
+        "price": order.get("price"),
+        "symbol": (
+            order.get("symbol")
+            or order.get("chain_symbol")
+            or order.get("underlying_symbol")
+            or leg.get("symbol")
+            or leg.get("underlying_symbol")
+        ),
+        "side": leg.get("side"),
+        "position_effect": leg.get("position_effect") or leg.get("positionEffect"),
+        "option_id": leg.get("option_id") or leg.get("optionId"),
+        "legs": legs,
+    }
     MARKER.parent.mkdir(parents=True, exist_ok=True)
-    MARKER.write_text(json.dumps({"date": today}))
+    MARKER.write_text(json.dumps(marker, indent=2) + "\n")
 
 
 def main() -> None:
@@ -99,6 +121,9 @@ def main() -> None:
     except Exception as exc:  # fail closed: a broken config must never allow
         block(f"cannot load config/state ({type(exc).__name__}: {exc})")
     order = payload.get("tool_input", {})
+    ref_id = order.get("ref_id")
+    if ref_id is None or not str(ref_id).strip():
+        block("ref_id is required and must be non-empty")
 
     # Fail closed on incomplete config: every required key must be present.
     # Existence, not truthiness — a missing dry_run must block (treating it as
@@ -188,7 +213,7 @@ def main() -> None:
 
     # Allow path: record the gate's own marker (replaces the old write into
     # state.json last_option_action, which the model could clobber).
-    write_marker(today)
+    write_marker(today, order, now)
     sys.exit(0)
 
 

@@ -71,6 +71,7 @@ def valid_buy(**overrides):
         "side": "buy",
         "type": "market",
         "dollar_amount": 100,
+        "ref_id": "EQ-REF-1",
     }
     order.update(overrides)
     return order
@@ -134,6 +135,19 @@ def test_placeholder_account_blocks(tmp_path):
 def test_wrong_symbol_blocks(tmp_path):
     result = run_gate(make_root(tmp_path), valid_buy(symbol="TSLA"))
     assert_blocked(result, "not whitelisted (only SPY)")
+
+
+def test_missing_ref_id_blocks(tmp_path):
+    order = valid_buy()
+    del order["ref_id"]
+    result = run_gate(make_root(tmp_path), order)
+    assert_blocked(result, "ref_id is required")
+
+
+@pytest.mark.parametrize("ref_id", ["", "   "], ids=["empty", "blank"])
+def test_blank_ref_id_blocks(tmp_path, ref_id):
+    result = run_gate(make_root(tmp_path), valid_buy(ref_id=ref_id))
+    assert_blocked(result, "ref_id is required")
 
 
 # 6. buy that is not market / missing dollar_amount -> block
@@ -218,7 +232,16 @@ def test_allow_writes_marker_and_blocks_second_order(tmp_path):
     first = run_gate(root, valid_buy())
     assert first.returncode == 0, first.stderr
     marker = root / "state" / "gate_equity.json"
-    assert json.loads(marker.read_text()) == {"date": "2026-06-10"}
+    assert json.loads(marker.read_text()) == {
+        "date": "2026-06-10",
+        "allowed_at": MARKET_OPEN_NOW,
+        "ref_id": "EQ-REF-1",
+        "account_number": FAKE_ACCOUNT,
+        "symbol": "SPY",
+        "side": "buy",
+        "type": "market",
+        "dollar_amount": 100,
+    }
     assert_blocked(run_gate(root, valid_buy()), "already placed today")
 
 

@@ -22,9 +22,10 @@ flowchart TD
     end
     EG -->|"exit 0 — allow"| PL["Robinhood MCP — place order"]
     OG -->|"exit 0 — allow"| PL
-    EG -.->|"exit 2 — block"| J["journal + state + notification"]
-    OG -.->|"exit 2 — block"| J
-    PL --> J
+    EG -.->|"exit 2 — block"| REC
+    OG -.->|"exit 2 — block"| REC
+    PL --> REC["scripts/reconcile_state.py — broker order reconciliation"]
+    REC --> J["journal + notification"]
 
     classDef gate fill:#fde8e8,stroke:#c0392b,stroke-width:2px
     class EG,OG gate
@@ -36,19 +37,20 @@ flowchart TD
 `launchd` (com.example.agentic-trader, weekdays 15:45 ET) → `run.sh`
 (time-window + lock guard) → `claude -p` executes [`TRADER.md`](TRADER.md) →
 `scripts/decide.py` computes the signal → Robinhood MCP reviews/places orders
-→ journal + state + macOS notification.
+→ broker-order reconciliation updates state → journal + macOS notification.
 
 The model never decides *what* to trade. It orchestrates: fetch a quote,
 check the position, call the decision script, place (or not place) one order,
-write the journal. Every step that matters is checked by code it cannot edit
-or bypass.
+and write the journal. Canonical state fields are written by deterministic
+scripts, not by model prose. Every step that matters is checked by code it
+cannot edit or bypass.
 
 ## Trust model: guardrails, not vibes
 
 The premise: an LLM is a capable operator but an untrusted one. So every
 safety property is enforced **outside the model's control** — in a PreToolUse
 hook, in file permissions, in tracked config — never by prompt instructions
-alone. Eight guardrail layers, all deterministic:
+alone. Nine guardrail layers, all deterministic:
 
 1. **Dry-run by default.** `config.json` ships with `dry_run: true`; the gate
    blocks every live order until you deliberately flip it. Orders are still
@@ -56,9 +58,10 @@ alone. Eight guardrail layers, all deterministic:
 2. **A deterministic PreToolUse order gate.** `scripts/order_gate.py` is wired
    as a Claude Code hook on `place_equity_order`. It is plain Python the
    harness runs *before* the tool call executes — the model cannot skip it,
-   argue with it, or edit it (the settings only allow writes to `state/` and
-   `logs/`). Exit 2 blocks the order; it also **fails closed**: a missing or
-   unparsable `config.json` or `state/state.json` blocks outright.
+   argue with it, or edit it (the settings do not allow direct model edits to
+   `state/`; state mutations happen through whitelisted `uv run` scripts).
+   Exit 2 blocks the order; it also **fails closed**: a missing or unparsable
+   `config.json` or `state/state.json` blocks outright.
 3. **Symbol + account whitelist.** Orders for any symbol other than the one
    configured, or any account other than the configured agentic account, are
    blocked. The real account number lives only in untracked
@@ -72,7 +75,11 @@ alone. Eight guardrail layers, all deterministic:
 7. **Drawdown kill switch with manual reset.** If portfolio value falls
    `kill_drawdown_pct` below its high-water mark, `halt: true` is set in
    `state/state.json` and the gate blocks all trading until a human resets it.
-8. **Audit journal of every run.** Each run appends one entry to
+8. **Broker-sourced state reconciliation.** After every decision/order attempt,
+   `scripts/reconcile_state.py` writes `last_action` / `last_option_action`
+   from the broker order list matched to the same-day gate marker `ref_id`. If
+   the broker has no matching order, `order_placed` is written `false`.
+9. **Audit journal of every run.** Each run appends one entry to
    `logs/journal.md` — signal JSON, action taken (or the blocked/DRY-RUN
    reason), order id and fill state — so there is a paper trail even for runs
    that did nothing.
@@ -93,9 +100,11 @@ published as-is. It wires the harness:
   `scripts/order_gate.py`, and `mcp__.*place_option_order` runs
   `scripts/option_gate.py`, before any order placement reaches the broker.
 - **Allow/deny permissions**: the session may read the repo, write only
-  `state/**` and `logs/**`, and run a short whitelist of commands
-  (`uv run`, `osascript`, `uuidgen`, `date`, `sleep`) plus the Robinhood MCP.
-  Reads of `~/.secrets/**` and `.env` files are denied.
+  `logs/**` directly, and run a short whitelist of commands (`uv run`,
+  `osascript`, `uuidgen`, `date`, `sleep`) plus the Robinhood MCP. Direct
+  model edits to `state/**` are denied; state is mutated by deterministic
+  scripts invoked through `uv run`. Reads of `~/.secrets/**` and `.env` files
+  are denied.
 
 That file, plus `run.sh`'s `--permission-mode dontAsk --max-turns 40`, is the
 whole containment story: a headless agent with real-money tools, boxed in by
@@ -164,6 +173,8 @@ automatically.
 - `TRADER.md` — the exact procedure the headless session follows
 - `scripts/order_gate.py` / `scripts/option_gate.py` — the deterministic
   order gates (PreToolUse hooks) for equity and option orders
+- `scripts/reconcile_state.py` — deterministic broker-order-to-state
+  reconciliation after each decision/order attempt
 - `scripts/decide.py` — the decision interface implementation
 - `scripts/backtest.py` — backtest harness (same indicator math as decide.py)
 - `scripts/run_strategies.py` — the paper fleet: evaluates all 10 candidate
@@ -177,7 +188,7 @@ automatically.
   real account number — see [`docs/config.md`](docs/config.md) for the full
   reference; `config.example.json` is a copyable starting point
 - `state/state.json` — untracked live state: high-water mark, halt flag,
-  last action
+  and broker-reconciled last action
 - `logs/journal.md` — one entry per run; `logs/runner.log` — scheduler output
 
 ## Ops
