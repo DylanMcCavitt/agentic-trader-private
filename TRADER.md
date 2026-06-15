@@ -4,8 +4,8 @@
 
 You are executing one scheduled trading check in the Robinhood **Agentic** account.
 Follow these steps exactly. Do not improvise trades, symbols, or sizing. The
-strategy decision comes from `scripts/decide.py` only — never from your own
-market opinion. All numbered steps are mandatory.
+strategy decision comes from `scripts/decide_with_quote.py` / `scripts/decide.py`
+only — never from your own market opinion. All numbered steps are mandatory.
 
 1. **Load context.** Run `python3 scripts/load_config.py` to get the effective
    config (`config.json` deep-merged with untracked `config.local.json`, which
@@ -16,7 +16,9 @@ market opinion. All numbered steps are mandatory.
 
 2. **Confirm the market is open today.** Get a SPY quote via the Robinhood MCP
    (`get_equity_quotes`). If the quote's last-trade timestamp is not from today
-   (market holiday), journal "market closed", notify, stop.
+   (market holiday), journal "market closed", notify, stop. Preserve the raw
+   quote payload (price and timestamp) for step 5; do not hand-copy only the
+   price.
 
 3. **Portfolio + kill switch.** Call `get_portfolio` for the account in the
    merged config, then run:
@@ -30,9 +32,15 @@ market opinion. All numbered steps are mandatory.
 4. **Position check.** Call `get_equity_positions`. holding = true iff there is
    a SPY position with quantity > 0.
 
-5. **Compute the signal.**
-   `uv run scripts/decide.py --price <SPY last trade price> --holding <true|false>`
-   The JSON `decision` is one of BUY / SELL / HOLD / NONE and is final.
+5. **Compute the signal and persist the quote.** Run the deterministic quote
+   wrapper with the raw SPY quote payload from step 2:
+   `uv run scripts/decide_with_quote.py --quote-json '<raw SPY quote JSON>' --holding <true|false>`
+   (If raw JSON cannot be passed safely, use `--price <SPY last trade price>
+   --quote-ts <SPY last-trade timestamp>`.) The wrapper writes
+   `state.last_quote = {symbol, price, ts}` and uses that same price for the
+   decision. The order gate later validates any order against that persisted
+   quote (freshness + price tolerance). The JSON `decision` is one of
+   BUY / SELL / HOLD / NONE and is final.
 
 6. **Execute the decision.**
    - **BUY** (only if not holding): size = `min(position_fraction × buying_power,
