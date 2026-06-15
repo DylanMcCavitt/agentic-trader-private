@@ -2,9 +2,7 @@
   "permissions": {
     "allow": [
       "Read",
-      "Edit(./state/**)",
       "Edit(./logs/**)",
-      "Write(./state/**)",
       "Write(./logs/**)",
       "Bash(uv run:*)",
       "Bash(osascript:*)",
@@ -14,6 +12,8 @@
       "mcp__claude_ai_Robinhood"
     ],
     "deny": [
+      "Edit(./state/**)",
+      "Write(./state/**)",
       "Read(~/.secrets/**)",
       "Read(./**/.env)"
     ]

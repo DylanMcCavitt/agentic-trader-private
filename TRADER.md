@@ -38,18 +38,32 @@ market opinion. All numbered steps are mandatory.
    - **BUY** (only if not holding): size = `min(position_fraction × buying_power,
      max_order_usd)`, rounded down to 2 decimals. Call `review_equity_order`
      (market, dollar_amount, regular_hours, gfd). If review shows blocking
-     alerts, journal them and stop. Otherwise call `place_equity_order` with the
-     same parameters and a fresh UUID `ref_id`.
+     alerts, do not place; proceed to step 7 reconciliation. Otherwise call
+     `place_equity_order` with the same parameters and a fresh UUID `ref_id`.
    - **SELL** (only if holding): sell the full `shares_available_for_sells` as a
-     market order (regular_hours, gfd), review first, fresh UUID `ref_id`.
+     market order (regular_hours, gfd), review first with a fresh UUID `ref_id`.
+     If review shows blocking alerts, do not place; proceed to step 7
+     reconciliation.
    - **HOLD / NONE**: no order.
    - If `place_equity_order` is blocked by the order gate hook, that is final —
      do NOT retry with altered parameters to get around it. In dry-run mode the
      gate blocks all placements by design: journal the order you *would* have
      placed, prefixed `DRY-RUN:`.
 
-7. **Verify fills.** If an order was placed, wait ~10s, then `get_equity_orders`
-   (filter to today, symbol SPY) and record the fill state.
+7. **Broker-sourced state reconciliation.** Always run reconciliation after
+   the decision/order-attempt path in step 6, including HOLD/NONE, review-block,
+   dry-run block, and order-gate block outcomes. Wait ~10s only if a placement
+   reached the broker; otherwise do not wait. Then call
+   `get_equity_orders` (today, symbol SPY) and pass the raw JSON — not a prose
+   summary — to:
+   `uv run scripts/reconcile_state.py --kind equity --date <YYYY-MM-DD ET> --decision <BUY|SELL|HOLD|NONE> --orders-json '<raw get_equity_orders JSON>'`
+   (stdin is also okay instead of `--orders-json`). This script is the
+   canonical writer for `last_run`, `last_action`, and `position_opened`: it
+   sets `order_placed=false` when no broker order matches the same-day gate
+   marker ref_id, including no-order paths. For option order flows, use
+   `get_option_orders` and `--kind option --action <action>` the same way after
+   every option decision/attempt (wait ~10s only if placement reached the
+   broker) to update `last_option_action`.
 
 8. **Paper fleet update.** Get quotes for SPY, QQQ, and IWM in one
    `get_equity_quotes` call, then run:
@@ -77,12 +91,10 @@ market opinion. All numbered steps are mandatory.
     "BUY $510.43 notional of SPY (~0.70 sh at $727.08), market order" — never
     "BUY SPY market $510.43", which reads like a limit price.
 
-11. **Update state.** Re-read the current `state/state.json` first, then write
-    only `last_run` (ISO timestamp), `last_action` `{date, decision,
-    order_placed: bool, order_id}`, and `position_opened` (set to today's date
-    on a fill of a buy; null after a sell fills; otherwise leave unchanged).
-    Preserve the script-updated `hwm`, `halt`, `halt_reason`, and any unknown
-    fields.
+11. **Do not manually update state.** `state/state.json` was already written by
+    the deterministic reconciler in step 7. Never overwrite
+    `last_action`/`last_option_action` from journal prose, memory, or believed
+    session state.
 
 12. **Notify.** `osascript -e 'display notification "<decision + value>" with title "Agentic Trader"'`.
 
