@@ -5,9 +5,21 @@ rsi() must stay identical to scripts/decide.py and scripts/backtest.py.
 import pandas as pd
 import yfinance as yf
 
+try:
+    from yfinance_utils import yfinance_download_timeout
+except ModuleNotFoundError:  # allow imports as scripts.strategies.common
+    from scripts.yfinance_utils import yfinance_download_timeout
+
 
 def fetch_history(symbol: str, period: str = "2y") -> pd.DataFrame:
-    df = yf.download(symbol, period=period, interval="1d", auto_adjust=True, progress=False)
+    df = yf.download(
+        symbol,
+        period=period,
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        timeout=yfinance_download_timeout(),
+    )
     if df.empty or "Close" not in df:
         raise RuntimeError(f"no data for {symbol}")
     if isinstance(df.columns, pd.MultiIndex):

@@ -17,13 +17,25 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
+try:
+    from yfinance_utils import yfinance_download_timeout
+except ModuleNotFoundError:  # importlib tests load this file from repo root
+    from scripts.yfinance_utils import yfinance_download_timeout
+
 CONFIG = json.loads((Path(__file__).parent.parent / "config.json").read_text())
 
 _UNSET = object()  # sentinel: scale_rsi=None is meaningful (no scale-in)
 
 
 def fetch(symbol: str) -> pd.DataFrame:
-    df = yf.download(symbol, period="max", interval="1d", auto_adjust=True, progress=False)
+    df = yf.download(
+        symbol,
+        period="max",
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        timeout=yfinance_download_timeout(),
+    )
     if df.empty or "Close" not in df:
         raise RuntimeError(f"no data for {symbol}")
     if isinstance(df.columns, pd.MultiIndex):

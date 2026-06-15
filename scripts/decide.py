@@ -15,6 +15,11 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
+try:
+    from yfinance_utils import yfinance_download_timeout
+except ModuleNotFoundError:  # importlib tests load this file from repo root
+    from scripts.yfinance_utils import yfinance_download_timeout
+
 CONFIG = json.loads((Path(__file__).parent.parent / "config.json").read_text())
 
 
@@ -34,7 +39,14 @@ def main() -> None:
     args = ap.parse_args()
 
     sym = CONFIG["symbol"]
-    df = yf.download(sym, period="2y", interval="1d", auto_adjust=True, progress=False)
+    df = yf.download(
+        sym,
+        period="2y",
+        interval="1d",
+        auto_adjust=True,
+        progress=False,
+        timeout=yfinance_download_timeout(),
+    )
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     px = df["Close"].copy()
