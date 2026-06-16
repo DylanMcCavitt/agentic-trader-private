@@ -39,6 +39,13 @@ flowchart TD
 `scripts/decide.py` computes the signal → Robinhood MCP reviews/places orders
 → broker-order reconciliation updates state → journal + macOS notification.
 
+Two sleeves run each day against the same account: the **equity sleeve**
+(RSI(2) on SPY via `scripts/decide.py`) and an **option sleeve** that trades
+the best liquid-cap option strategy from the paper fleet
+(`scripts/select_sleeve.py` → `scripts/decide_option.py` →
+`scripts/select_option_contract.py`), each behind its own deterministic gate.
+Both are dry-run until you flip `dry_run`.
+
 > **Scheduler timezone requirement:** install and run this LaunchAgent only on
 > an Eastern Time host (`America/New_York` or an equivalent IANA/legacy ET zone).
 > `launchd` `StartCalendarInterval` is evaluated in the Mac's machine-local timezone;
@@ -135,13 +142,29 @@ produces the signal. Full rules, parameters, and backtest methodology:
 
 ### The paper fleet
 
-Alongside the live strategy, every run forward-tests a fleet of 10
-candidate strategies — 5 equity, 5 single-leg options — each in its own
+Alongside the live equity strategy, every run forward-tests a fleet of
+candidate strategies — equity, a rotation, and single-leg options (including
+liquid large-cap calls on AAPL, MSFT, NVDA, GOOGL, AMZN) — each in its own
 $10k paper book (`scripts/run_strategies.py` → `state/paper.json` +
 `logs/paper.md`). The fleet never places real orders; it exists so dry-run
-weeks compare ten candidates instead of validating one. Rank them with
+weeks compare many candidates instead of validating one. Rank them with
 `uv run scripts/scoreboard.py`. Full lineup and promotion path:
 [`docs/strategies.md`](docs/strategies.md).
+
+### The option sleeve
+
+A second dry-run sleeve trades one long option per day in the live account
+(gated, so dry-run until you flip `dry_run`). It picks no strategy by hand:
+`scripts/select_sleeve.py` chooses among `option_sleeve.candidates` — the best
+by decayed Sharpe once a candidate has ≥ `min_score_days` paper returns, else
+`option_sleeve.default`. It always returns a strategy and never blocks on paper
+history (the 20-return threshold gates paper *ranking* only, exactly as the
+equity sleeve was never gated on it). `scripts/decide_option.py` maps that
+strategy's signal to OPEN/CLOSE/HOLD/NONE, and `scripts/select_option_contract.py`
+picks the most meaningful contract whose 1-lot premium fits under
+`max_option_premium_usd` — not necessarily in the money.
+[`TRADER.md`](TRADER.md) steps 8–9 drive it; `scripts/option_gate.py` is the
+backstop.
 
 Options orders have their own deterministic PreToolUse gate
 (`scripts/option_gate.py`, wired to `place_option_order`): long-only —
@@ -183,10 +206,14 @@ automatically.
   order gates (PreToolUse hooks) for equity and option orders
 - `scripts/reconcile_state.py` — deterministic broker-order-to-state
   reconciliation after each decision/order attempt
-- `scripts/decide.py` — the decision interface implementation
+- `scripts/decide.py` — the equity decision interface implementation
+- `scripts/decide_option.py` — option-sleeve decision (signal → OPEN/CLOSE/
+  HOLD/NONE); `scripts/select_sleeve.py` picks the day's option strategy from
+  the paper fleet; `scripts/select_option_contract.py` picks a budget-fit
+  contract from the broker chain
 - `scripts/backtest.py` — backtest harness (same indicator math as decide.py)
-- `scripts/run_strategies.py` — the paper fleet: evaluates all 10 candidate
-  strategies into per-strategy paper books (`state/paper.json`,
+- `scripts/run_strategies.py` — the paper fleet: evaluates every enabled
+  candidate strategy into per-strategy paper books (`state/paper.json`,
   `logs/paper.md`); `scripts/scoreboard.py` ranks them;
   `scripts/backtest_fleet.py` replays the same signals over decades of
   history (options via a documented Black-Scholes approximation) —
