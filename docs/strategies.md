@@ -56,6 +56,11 @@ was never closed settles at intrinsic value.
 | `opt_rsi2_put_spy` | SPY | overbought rally in a downtrend → ITM put (5% ITM, 21–45 DTE) | close < SMA200 and RSI(2) > 90 | RSI(2) < 30, or ≤ 7 DTE |
 | `opt_ibs_call_iwm` | IWM | IBS dip → ITM call (5% ITM, 21–45 DTE) | IBS < 0.15 and close > SMA200 | IBS > 0.8 or close > SMA5, or ≤ 7 DTE |
 | `opt_breakdown_put_qqq` | QQQ | breakdown in a downtrend → ITM put (2% ITM, 30–60 DTE) | close < prior 20d low and close < SMA200 | close > prior 10d high, or ≤ 10 DTE |
+| `opt_rsi2_call_aapl` | AAPL | RSI(2) dip → ATM call (28–45 DTE) — option-sleeve candidate | close > SMA200 and RSI(2) < 10 | close > SMA5, or ≤ 7 DTE |
+| `opt_rsi2_call_msft` | MSFT | RSI(2) dip → ATM call (28–45 DTE) — option-sleeve candidate | close > SMA200 and RSI(2) < 10 | close > SMA5, or ≤ 7 DTE |
+| `opt_rsi2_call_nvda` | NVDA | RSI(2) dip → ATM call (28–45 DTE) — option-sleeve candidate | close > SMA200 and RSI(2) < 10 | close > SMA5, or ≤ 7 DTE |
+| `opt_rsi2_call_googl` | GOOGL | RSI(2) dip → ATM call (28–45 DTE) — option-sleeve candidate | close > SMA200 and RSI(2) < 10 | close > SMA5, or ≤ 7 DTE |
+| `opt_rsi2_call_amzn` | AMZN | RSI(2) dip → ATM call (28–45 DTE) — option-sleeve candidate | close > SMA200 and RSI(2) < 10 | close > SMA5, or ≤ 7 DTE |
 
 Why deep ITM and short DTE windows: ITM minimizes theta bleed and IV-crush
 drag, so the position behaves like leveraged delta on the underlying signal
@@ -65,6 +70,12 @@ before gamma/theta get violent into expiry.
 Mean-reversion entries (RSI(2)/IBS) resolve in 1–5 days, so they pay very
 little theta. The honest caveat: IV is usually elevated exactly when those
 entries fire, which is why the calls are bought deep in the money.
+
+The five liquid-cap calls (`opt_rsi2_call_{aapl,msft,nvda,googl,amzn}`) are
+the **option sleeve** candidate set (`option_sleeve.candidates`). They paper-
+trade like the others, but the live sleeve selects a *budget-affordable*
+contract (not necessarily ITM — see the option sleeve section below), since
+one mega-cap contract must fit under the live `max_option_premium_usd` cap.
 
 ## Backtesting the fleet
 
@@ -90,7 +101,7 @@ Indicators warm up on data before `--start`; trading begins at `--start`.
 
 `scripts/allocate.py` ranks the paper books by exponentially decayed Sharpe
 of daily book returns, and `--pick` Thompson-samples a daily champion from
-the same books. The daily run (step 9 of [TRADER.md](../TRADER.md)) records
+the same books. The daily run (step 11 of [TRADER.md](../TRADER.md)) records
 the verdict:
 
 ```bash
@@ -114,13 +125,42 @@ automatic consequence of a pick.
 1. Let the fleet run dry for several weeks; watch `scripts/scoreboard.py`.
 2. Equity candidate: point the live config (`symbol` + decide.py params) at
    it; the existing equity gate applies unchanged.
-3. Options candidate: live options orders are already gated by
-   `scripts/option_gate.py` (long-only, premium-capped, 1/day, fail-closed),
-   but the TRADER.md live procedure covers equities only — promoting an
-   options strategy to live requires extending it deliberately. The gate's
-   known limit: the order payload carries only the option instrument UUID,
-   so the underlying can't be verified deterministically; the premium cap
-   and the dedicated account are the backstops.
+3. Options candidate: the **option sleeve** already runs an options strategy
+   live (dry-run, gated) — see below. To change which one, edit
+   `option_sleeve.candidates` / `default` in `config.json`; the sleeve picks
+   the best-scoring candidate once it has paper history. The gate's known
+   limit: the order payload carries only the option instrument UUID, so the
+   underlying can't be verified deterministically; the premium cap and the
+   dedicated account are the backstops.
+
+## Option sleeve (live, gated)
+
+A second dry-run sleeve, alongside the equity sleeve, trades a single long
+option per day in the dedicated account (steps 8–9 of
+[TRADER.md](../TRADER.md)). It mirrors the equity sleeve's "go straight to
+dry-run" model — it never waits on paper performance to start trading.
+
+- **Selection** (`scripts/select_sleeve.py`): among `option_sleeve.candidates`
+  it picks the best by decayed Sharpe once a candidate has ≥
+  `option_sleeve.min_score_days` paper returns; until then it uses
+  `option_sleeve.default`. It *always* returns a strategy — the 20-return
+  threshold gates paper ranking only, never whether the sleeve trades.
+- **Decision** (`scripts/decide_option.py`): the chosen strategy's signal →
+  OPEN / CLOSE / HOLD / NONE, with a `≤ exit_dte` near-expiry close override.
+- **Contract** (`scripts/select_option_contract.py`): from the broker's chain,
+  the nearest expiry in the DTE window, then the highest-premium contract whose
+  1-lot cost still fits under `max_option_premium_usd` — the most meaningful
+  affordable contract, **not** necessarily in the money.
+- **Gate** (`scripts/option_gate.py`): long-only, limit-only opens, premium and
+  contract caps, one option order per day (its own marker, separate from the
+  equity gate), dry-run/halt/account/market-hours, fail-closed.
+- **Reconcile**: `scripts/reconcile_state.py --kind option` writes
+  `last_option_action` from the broker order list.
+
+Default candidate set: liquid large-cap calls (AAPL, MSFT, NVDA, GOOGL, AMZN).
+Because one mega-cap contract can exceed a tight premium cap, the sleeve buys
+the affordable strike rather than a fixed moneyness; raise
+`max_option_premium_usd` to let pricier 1-lots through the placement step.
 
 ## Adding or tuning strategies
 
