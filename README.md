@@ -2,6 +2,14 @@
 
 [![CI](https://github.com/DylanMcCavitt/agentic-trader/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/DylanMcCavitt/agentic-trader/actions/workflows/ci.yml)
 
+> **Project direction (revamp in progress).** This repo is evolving from a
+> single-host harness into an **open-core platform for Robinhood Agentic
+> Trading** — a managed runtime, deterministic safety layer, strategy library,
+> and dashboard on top of Robinhood's Agentic MCP. See
+> [docs/product-vision.md](docs/product-vision.md) for positioning and roadmap.
+> The description below documents the **current single-host system**, which keeps
+> working until the cloud cutover.
+
 An autonomous trading agent: a scheduled, headless Claude Code session that
 trades through a broker MCP (Robinhood's official Agentic Trading connector),
 with safety enforced by **deterministic, model-independent guardrails** rather
