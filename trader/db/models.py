@@ -38,6 +38,12 @@ class Account(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     broker: Mapped[str] = mapped_column(String(50), default="robinhood")
+    # Latest portfolio equity fed by the execution lane (kill-switch input).
+    equity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # Account high-water mark; only ever ratchets up. The 30% account
+    # kill-switch (envelope.ACCOUNT_KILL_SWITCH_DRAWDOWN) measures from here.
+    hwm: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    equity_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     sleeves: Mapped[list["Sleeve"]] = relationship(back_populates="account")
@@ -54,6 +60,9 @@ class Sleeve(Base):
     drawdown_halt_fraction: Mapped[Decimal] = mapped_column(Numeric(6, 4))
     halted: Mapped[bool] = mapped_column(Boolean, default=False)
     hwm: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # Latest sleeve value fed by the execution/review lane (per-sleeve
+    # drawdown halt input); tracked alongside the account-level equity.
+    equity: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     account: Mapped[Account] = relationship(back_populates="sleeves")
@@ -89,13 +98,19 @@ class Order(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    sleeve_id: Mapped[int | None] = mapped_column(ForeignKey("sleeves.id"), index=True)
     thesis_id: Mapped[int | None] = mapped_column(ForeignKey("theses.id"), index=True)
     ref_id: Mapped[str] = mapped_column(String(64), unique=True)
+    symbol: Mapped[str | None] = mapped_column(String(20), index=True)
+    instrument: Mapped[str | None] = mapped_column(String(20))  # equity | option
     side: Mapped[str] = mapped_column(String(10))  # buy | sell
     qty: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     notional: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # pending | simulated | denied | filled | partially_filled | cancelled |
+    # rejected | unmatched
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     gate_verdict: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # full order as composed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     thesis: Mapped[Thesis | None] = relationship(back_populates="orders")
@@ -141,6 +156,32 @@ class ParamHistory(Base):
     evidence: Mapped[str | None] = mapped_column(Text)
     actor: Mapped[str] = mapped_column(String(50))  # human | improve-lane
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Quote(Base):
+    """Quote/screen snapshot stored by the execution lane.
+
+    Gates read the most recent row per symbol for quote-freshness and
+    liquidity checks. ``symbol`` is the underlying ticker for both equity
+    and option quotes; option-specific fields (open interest, bid/ask of
+    the contract) live in the dedicated columns / payload.
+    """
+
+    __tablename__ = "quotes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="equity")  # equity | option
+    price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))  # last/mark
+    bid: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    ask: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    avg_dollar_volume: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))
+    open_interest: Mapped[Decimal | None] = mapped_column(Numeric(14, 0))
+    # For option quotes: identifies the contract this row describes.
+    occ_symbol: Mapped[str | None] = mapped_column(String(40), index=True)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    quoted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class LaneRun(Base):
