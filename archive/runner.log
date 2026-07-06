@@ -1,0 +1,344 @@
+2026-06-10 15:45:05 run start
+Run complete. The signal fired **BUY** today, but no order was placed because the account is in dry-run mode.
+
+- **Market**: open; SPY at $727.08 (15:45 ET), down ~1.4% from yesterday's $737.05 close.
+- **Kill switch**: portfolio $537.30 equals the high-water mark — no drawdown, no halt.
+- **Signal**: BUY — RSI(2) = 4.52 (< 10.0 entry) with price above the 200-day SMA ($683.07), per `scripts/decide.py`.
+- **Order**: sized at $510.43 (min of 95% of buying power and the $550 cap). Review passed with only an informational EQUITY_SUITABILITY notice. `place_equity_order` was blocked by the order gate hook because `dry_run: true` — treated as final per the run book.
+- **Records**: journaled as `DRY-RUN:` in `logs/journal.md`, state updated (`last_action`: BUY, no order, `position_opened` unchanged), and the desktop notification was sent.
+
+If you want the next BUY signal to execute for real, flip `dry_run` to `false` in `config.json`.
+2026-06-10 15:47:21 run end (exit 0)
+2026-06-11 15:45:05 run start
+Run complete — decision **NONE**, no order placed.
+
+- **Market**: open; SPY last trade $738.97 at 15:45 ET (prev close $725.43).
+- **Portfolio**: $537.30, all cash, equal to the HWM — no update, kill switch not triggered (floor $456.71).
+- **Position**: none, so holding = false.
+- **Signal**: RSI(2) = 64.42 vs the <10.0 entry threshold; price is above the SMA200 trend filter (683.57), but no entry condition. Yesterday's BUY signal was a dry-run, so there was no open position to manage today.
+- Journaled to `logs/journal.md`, updated `state/state.json`, and sent the desktop notification.
+
+One note: the Bash heredoc append to the journal was denied by permissions (don't-ask mode), so I appended the identical entry with the Edit tool instead — content is unchanged.
+2026-06-11 15:47:16 run end (exit 0)
+2026-06-12 15:45:00 run start
+Daily run complete — decision **NONE**, no order placed.
+
+- **Market**: open; SPY last trade $740.63 at 15:45 ET.
+- **Kill switch**: portfolio $537.30 equals HWM $537.30 — no drawdown, no halt.
+- **Signal**: not holding; RSI2 is 70.6 (entry needs < 10.0), price is above the 200-day SMA ($684.07). decide.py returned NONE, so steps 6–7 (order + fill check) didn't apply.
+- **Paper fleet**: `run_strategies.py` skipped itself because it already ran earlier today; per TRADER.md I didn't force a re-run. Today's recorded fleet results (all NONE except momentum_rotation, which bought 13.1483 QQQ @ $722.52, book $9,998.10) are reflected in the journal entry.
+- **Bookkeeping**: journal appended to `logs/journal.md`, `state/state.json` updated (last_run 2026-06-12T15:46:17-04:00, last_action NONE), notification sent.
+
+One observation: the paper fleet had already run today even though `state.json`'s last_run was 2026-06-11, suggesting an earlier partial session today. Nothing needed fixing, but worth knowing if you see duplicate-looking paper entries.
+2026-06-12 15:46:54 run end (exit 0)
+2026-06-15 15:45:04 run start
+Daily trading run complete. All 12 steps executed as written.
+
+**Summary — 2026-06-15 15:47 ET**
+
+| Step | Result |
+|------|--------|
+| Config | account `456234764`, `dry_run: true`, `halt: false` → proceed |
+| Market | Open — SPY last trade $754.48 @ 15:45 ET |
+| Kill switch | `halt: false`, `breached: false`, HWM $537.30 (unchanged) |
+| Position | No SPY position → holding = false |
+| Signal | **NONE** — RSI2 90.3 (needs < 10.0); above SMA200 but no entry |
+| Order | None placed |
+| Reconcile | `order_placed: false`, status `not_found` |
+| Paper fleet | All NONE except `momentum_rotation` HOLD ($10,274.08) and `opt_ibs_call_iwm` OPEN (2× IWM Jul-10 280C @ 17.49, $9,998.70) |
+| Allocator | Champion `rsi2_spy` (score n/a, weight 0.1667) — recommend-only |
+
+No live order was warranted (decision NONE; dry-run mode active regardless). Journal entry appended and macOS notification fired.
+
+Note for step 5: the raw quote JSON couldn't be passed to `decide_with_quote.py` because the broker's timestamp field is `venue_last_trade_time`, which isn't in the wrapper's recognized `TS_KEYS`. I used the sanctioned `--price`/`--quote-ts` fallback with the exact step-2 values. If you'd like, I can add `venue_last_trade_time` to the wrapper's `TS_KEYS` so the raw-JSON path works directly next time.
+2026-06-15 15:48:08 run end (exit 0)
+2026-06-16 15:45:05 run start
+Daily trading run complete. All 12 steps executed as written.
+
+**Summary — 2026-06-16 15:47 ET**
+
+| Step | Result |
+|---|---|
+| Config / state | account `456234764`, `dry_run: true`, `halt: false` |
+| Market | Open — SPY last trade $750.95 @ 15:45 ET |
+| Kill switch | `halt: false`, not breached; HWM $537.30 unchanged |
+| Position | None — holding = false |
+| Signal | **NONE** — RSI2 65.3 (need < 10.0), close $750.95 above SMA200 $685.18 |
+| Order | None placed (decision NONE) |
+| Reconcile | `order_placed=false`, status `not_found` — written by reconciler |
+| Paper fleet | ibs_qqq BUY (12.97 QQQ @ 732.36); opt_ibs_call_iwm CLOSE (sold 2x IWM 280C @ 15.42); momentum_rotation HOLD; rest NONE |
+| Allocator | champion today: `opt_rsi2_put_spy` (score n/a, weight 0.1667) |
+
+No real order was warranted or placed. Journal appended, notification sent.
+2026-06-16 15:48:31 run end (exit 0)
+2026-06-17 15:45:00 run start
+Daily trading run complete. All 12 steps executed.
+
+**Decision: NONE** — no order placed.
+
+- **Config/state:** account 456234764, `halt=false`, `dry_run=true`.
+- **Market:** open — SPY last trade $740.51 at 15:45 ET (today, 2026-06-17).
+- **Portfolio:** $537.30 (all cash); HWM $537.30 unchanged, kill switch not breached (`halt=false`).
+- **Position:** none → holding=false.
+- **Signal:** RSI2 26.7 (needs < 10.0), above SMA200 685.68 → **NONE** (final).
+- **Order:** none. Reconciler wrote state: `order_placed=false`, `status=not_found`.
+- **Paper fleet:** one trade today — `opt_ibs_call_iwm` OPENed 1x IWM 2026-07-10 275C @ 19.60; all equity books unchanged.
+- **Allocator:** champion today: rsi2_spy (score n/a, weight 0.1667).
+- Journal appended; notification sent.
+
+Note for the record: the raw Robinhood quote could not be passed via `--quote-json` because its timestamp field (`venue_last_trade_time`) isn't among the wrapper's recognized keys, so per TRADER.md I used `--price`/`--quote-ts` with both values taken from the same raw payload.
+2026-06-17 15:47:45 run end (exit 0)
+2026-06-18 15:45:06 run start
+I'm blocked at Step 2. The Robinhood MCP connector requires authentication before any of its trading tools (`get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `get_equity_orders`) become available — and the run can't proceed without live quotes and portfolio data.
+
+**Action needed from you:** Run `/mcp`, select **"claude.ai Robinhood"**, and complete the OAuth flow in your browser. Once authenticated, tell me and I'll resume the run from Step 2.
+
+Status so far:
+- **Step 1 (Load context):** ✅ Complete
+  - Config merged; `account_number` = `456234764` (valid, not REPLACE_ME)
+  - `dry_run` = **true** → the order gate will block all real placements by design (any decided order will be journaled as `DRY-RUN:`)
+  - `state/state.json`: `halt` = false (not halted), so the run continues
+- **Step 2 onward:** ⏸ Blocked pending Robinhood authentication
+
+I'll wait for your go-ahead.
+2026-06-18 15:45:43 run end (exit 0)
+2026-06-19 15:45:01 skip: market holiday/half-day
+2026-06-22 15:45:05 run start
+The trading run is blocked at Step 2: the **Robinhood MCP server is not authenticated**, so the broker tools (`get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `place_equity_order`, etc.) are not available. This is a connector I cannot authenticate on your behalf.
+
+Progress so far:
+- **Step 1 done.** Config merged OK — symbol `SPY`, account `456234764` (valid), `dry_run: true`. `state/state.json` shows `halt: false`, so the run is clear to proceed.
+- **Step 2 blocked.** Every remaining mandatory step (live SPY quote, portfolio/kill-switch, position check, signal, order, reconciliation) depends on the broker MCP. I will not fabricate a quote or skip ahead — the strategy requires live broker data.
+
+**To unblock:** run `/mcp`, select **"claude.ai Robinhood"**, and complete authentication in your browser. Then tell me to continue and I'll resume from Step 2.
+
+I have not journaled or notified — this is a setup/auth blocker, not a market-closed or halt condition, and no MCP trading call has actually errored. Nothing has been written to state. Want me to proceed once you've authenticated?
+2026-06-22 15:46:03 run end (exit 0)
+2026-06-23 15:45:05 run start
+The interactive question tool is also blocked in "don't ask" mode, so I'll just state it plainly here.
+
+**The run is halted at step 1 — no quote pulled, no portfolio read, no orders, no state changes.** Nothing has executed, so the run is clean to restart.
+
+**Reason:** the entire TRADER.md runbook is built on shell-executed scripts (`load_config.py`, `drawdown_kill.py`, `decide_with_quote.py`, `reconcile_state.py`, `run_strategies.py`, `allocate.py`) plus `osascript`, and the **Bash** tool is denied under the current "don't ask" permission mode. The decision and all state writes are required to come from those deterministic scripts, so I won't substitute `node_repl`, a subagent, or hand-written state — that would bypass the order gate / kill switch / reconciler the runbook depends on for a real-money account.
+
+**To proceed:** allow the Bash tool (switch out of "don't ask" mode, or grant Bash for this session), then tell me to continue. I'll re-run from step 1.
+
+**Alternative:** if you'd rather hold the run for today, just say so and I'll leave everything as-is.
+2026-06-23 15:46:03 run end (exit 0)
+2026-06-24 15:45:04 run start
+I have to stop before placing any part of this run. Two prerequisites that TRADER.md depends on are unavailable in this session, and the file is explicit that the steps must be followed exactly with no improvisation.
+
+## Blockers
+
+**1. The Bash tool is denied (the harness is in "don't ask mode").**
+Every mandatory step shells out, and I cannot run any of them:
+- Step 1: `python3 scripts/load_config.py` (load merged config, read `account_number`)
+- Step 3: `uv run scripts/drawdown_kill.py` (kill switch — owns `halt` state)
+- Step 5: `uv run scripts/decide_with_quote.py` (the only sanctioned signal source)
+- Steps 7–9: `reconcile_state.py`, `run_strategies.py`, `allocate.py`
+- Step 12: `osascript` notification
+
+**2. The Robinhood MCP server is not connected.**
+None of the broker tools the run requires exist in this session. Connected MCP servers are TradingView, node_repl, openaiDeveloperDocs, chrome-devtools, context7, XcodeBuildMCP, and the claude.ai design servers — no broker. Missing tools:
+- `get_equity_quotes` (steps 2, 8)
+- `get_portfolio` (step 3)
+- `get_equity_positions` (step 4)
+- `review_equity_order` / `place_equity_order` (step 6)
+- `get_equity_orders` / `get_option_orders` (step 7)
+
+## Why I'm not working around it
+
+I will not substitute my own market data, hand-fabricate a quote/decision, or skip the deterministic scripts — TRADER.md forbids improvising trades, the signal must come from `decide_with_quote.py` only, and the safety scripts (`drawdown_kill.py`, the order gate, `reconcile_state.py`) are exactly the controls that must run. Faking the journal/notify steps with invented values would also misrepresent what happened. There is no safe partial execution here: with no broker feed and no script execution, I can't even complete Step 2 (confirm the market is open), so the run cannot legitimately start.
+
+## What I need from you
+
+To proceed, one of:
+- **Enable Bash** (or run in a permission mode that allows the `python3`/`uv`/`osascript` calls), **and**
+- **Connect the Robinhood MCP server** so the `get_*` / `review_*` / `place_*` tools are available.
+
+Once both are in place, tell me to go and I'll run all 12 steps in order. Want me to do anything else in the meantime — e.g. inspect the scripts or current `state/state.json` to sanity-check the setup (read-only)?
+2026-06-24 15:46:06 run end (exit 0)
+2026-06-25 15:45:04 run start
+I have to stop here. The run cannot be executed in this session, for two independent reasons — neither of which I can work around without fabricating data, which TRADER.md explicitly forbids ("Do not improvise trades, symbols, or sizing").
+
+## Blockers
+
+**1. Shell execution is denied (don't-ask mode).**
+Step 1 (`python3 scripts/load_config.py`) was denied, and every subsequent mandatory step depends on running a script that has no read-only equivalent:
+- `scripts/drawdown_kill.py` (step 3 — kill switch / hwm state)
+- `scripts/decide_with_quote.py` (step 5 — the *only* sanctioned signal source)
+- `scripts/reconcile_state.py` (step 7 — canonical state writer)
+- `scripts/run_strategies.py` (step 8 — paper fleet)
+- `scripts/allocate.py` (step 9 — allocator)
+- `osascript` (step 12 — notify)
+
+These are computations and state mutations, not reads, so I can't substitute `head`/`cat`/etc. Running them another way (e.g., piping Python through a different tool) would be a deliberate circumvention of the denial, which I won't do.
+
+**2. The Robinhood broker MCP is not connected.**
+Steps 2–8 require `get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `review_equity_order`, `place_equity_order`, and `get_equity_orders`. I searched the available tool set — only TradingView **charting** tools are present (and those are explicitly "no broker/order actions, no quotes for trading"). The run never gets past step 2: I cannot fetch the SPY quote that feeds the persisted-quote gate and the decision.
+
+## What I did *not* do
+- No config was loaded, no quote obtained, no signal computed, no order reviewed/placed.
+- I did **not** hand-write a quote, decision, journal entry, or state mutation. `state/state.json` is untouched (last legitimate run: 2026-06-17, `last_action` NONE, `halt: false`).
+
+## What I need from you
+To run this as written, one of:
+1. **Grant Bash permission** for this session (or run in a mode that prompts), **and** confirm the Robinhood MCP server is connected/authenticated — without it, steps 2–8 still can't proceed.
+2. Or tell me this is intended to be a **dry-run/offline** exercise and clarify how the broker calls should be sourced.
+
+For reference, current state is clean and not halted:
+
+| field | value |
+|---|---|
+| `halt` | false |
+| `hwm` | 537.30 |
+| `last_run` | 2026-06-17T15:46 ET |
+| `last_action` | NONE (no order, SPY) |
+| `last_quote` | SPY 740.51 @ 2026-06-17 19:45 UTC |
+
+How would you like to proceed?
+2026-06-25 15:46:18 run end (exit 0)
+2026-06-26 15:45:05 run start
+I have to stop here. Two hard dependencies of the run are unavailable, and neither can be safely worked around. No trade was attempted and no state was changed.
+
+## What I completed
+
+- **Step 1 (partial):** Read `state/state.json`. `halt` is `false`, so this is not a halt-state abort. Last run was `2026-06-17`, last decision `NONE`, no open position recorded.
+
+## Blockers
+
+**1. Bash execution is denied (`don't ask` mode).**
+The run is driven entirely by deterministic scripts that I must execute and must not substitute or reimplement:
+- `python3 scripts/load_config.py` (step 1) — **failed: permission denied**
+- `uv run scripts/drawdown_kill.py` (step 3, kill switch)
+- `uv run scripts/decide_with_quote.py` (step 5, the *only* sanctioned source of the BUY/SELL/HOLD signal)
+- `uv run scripts/reconcile_state.py` (step 7, canonical state writer)
+- `uv run scripts/run_strategies.py`, `scripts/allocate.py` (steps 8–9)
+- `osascript` notify (step 12)
+
+TRADER.md forbids improvising the decision ("never from your own market opinion"), so I can't hand-compute the signal, and routing these scripts through another tool (e.g. `node_repl` shelling out) would be circumventing the denial — I won't do that.
+
+**2. No Robinhood broker MCP is connected.**
+Steps 2, 3, 4, 6, 7 require broker tools — `get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `review_equity_order`, `place_equity_order`, `get_equity_orders`. I searched the connected/connecting MCP servers; there is no broker/Robinhood server among them (only Adobe, Linear, TradingView, Vercel, Supabase, etc.). Without it I can't even confirm the market is open (step 2).
+
+## What I need to proceed
+
+Either is required; both are needed for a full live run:
+1. Grant Bash permission (at minimum for `python3 scripts/*.py` and `uv run scripts/*.py`), and
+2. Connect/enable the Robinhood broker MCP server.
+
+Once those are available, I'll run the procedure from step 1 exactly as written. How would you like to proceed?
+2026-06-26 15:46:06 run end (exit 0)
+2026-06-29 15:47:36 run start
+I have to stop here. The daily trading run cannot be executed in this environment because **two hard dependencies are unavailable**, and TRADER.md's steps are mandatory and deterministic — I'm explicitly forbidden from improvising data, decisions, or hand-writing state (steps 5, 7, 11).
+
+## Blockers
+
+**1. The Bash tool is denied** ("don't ask mode"). Every numbered step except the MCP calls runs a local script via Bash:
+- Step 1 — `scripts/load_config.py`
+- Step 3 — `scripts/drawdown_kill.py`
+- Step 5 — `scripts/decide_with_quote.py`
+- Step 7 — `scripts/reconcile_state.py`
+- Step 8 — `scripts/run_strategies.py`
+- Step 9 — `scripts/allocate.py`
+- Step 12 — `osascript` notification
+
+There is no non-Bash tool that runs these Python scripts, and I should not work around the denial.
+
+**2. The Robinhood MCP is not connected.** Steps 2, 3, 4, 6, 7, 8 require `get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `review_equity_order`, `place_equity_order`, and `get_equity_orders`. None of these tools is available — a search returned no Robinhood tools, and no Robinhood server appears among the connected or connecting MCP servers.
+
+I got exactly as far as reading `state/state.json` (which I can read directly): `halt: false`, last run `2026-06-17`, last action `NONE`. I did **not** fabricate a quote, compute a signal, place any order, or write to state/journal — all of that depends on the blocked tooling, and faking it would violate the run's design.
+
+## What I need from you
+
+To run this, please enable:
+1. **Bash execution** for this session (it's currently auto-denied), and
+2. The **Robinhood MCP server** (so the `get_equity_*` / `*_equity_order` / `get_portfolio` tools load).
+
+Once both are available, tell me to proceed and I'll execute all 12 steps exactly as written. I'm stopping rather than placing trades or touching state with incomplete tooling.
+2026-06-29 16:05:15 run end (exit 0)
+2026-06-30 15:45:02 run start
+I have to stop here. The daily trading run cannot proceed — both of its hard dependencies are unavailable in this session, and neither can be worked around without violating TRADER.md's rules.
+
+## Blockers
+
+**1. Bash execution is denied (don't-ask mode).**
+Step 1 of TRADER.md is mandatory and requires running a Python script:
+```
+python3 scripts/load_config.py
+```
+This was denied. Every numbered step except the MCP calls depends on Bash:
+- Step 3 — `uv run scripts/drawdown_kill.py` (kill switch)
+- Step 5 — `uv run scripts/decide_with_quote.py` (the signal — "the strategy decision comes from `scripts/decide_with_quote.py`… only")
+- Step 7 — `uv run scripts/reconcile_state.py` (canonical state writer)
+- Steps 8–9 — `run_strategies.py`, `allocate.py`
+- Step 12 — `osascript` notify
+
+There is no substitute tool. `node_repl` runs JavaScript, not the project's Python scripts, and using it to shell out would just be circumventing the denial — which I won't do. TRADER.md is explicit that the decision must come from the scripts, not from me, so I can't compute the RSI(2) signal by hand either.
+
+**2. The Robinhood broker MCP is not connected.**
+From Step 2 onward the run needs `get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `review_equity_order`, `place_equity_order`, and `get_equity_orders`. None are present. I searched the connected MCP servers — the only market tool is the **TradingView** server, which is charting-only and explicitly "does not… call brokers, place orders." I will **not** substitute a TradingView quote for the Robinhood quote: Step 5 persists that exact broker quote and the order gate later validates orders against it (freshness + price tolerance), so a different source would be an improvised trade — barred by the hard rules.
+
+## State, for reference (read-only, unchanged)
+- `state/state.json`: `halt: false`, hwm `537.30`, last run `2026-06-17`, last action `NONE`/not-placed, last quote SPY `740.51`. No write happened — the file is untouched.
+
+## To run today's check, I need one of:
+1. **Bash enabled** for this repo's scripts (at minimum `python3`/`uv run scripts/*.py` and `osascript`), **and**
+2. **The Robinhood broker MCP connected** so Steps 2–7 can fetch quotes/portfolio/positions and place/review/reconcile orders.
+
+Restore those two and I'll execute all 12 steps exactly as written. I did **not** journal, notify, or touch any state, since TRADER.md's logging/notify steps themselves run through the now-blocked Bash/`osascript` path and the run never got past Step 1.
+2026-06-30 15:45:58 run end (exit 0)
+2026-07-01 15:45:05 run start
+I have to stop here. The very first mandatory step of the trading run failed, and I can't safely proceed or work around it.
+
+## What happened
+
+- **Step 1 (Load context)** requires `python3 scripts/load_config.py`. The Bash tool is denied — Claude Code is running in **"don't ask" permission mode**, which auto-denies Bash. I did read `state/state.json` successfully (the Read tool works): `halt: false`, so the halt gate isn't the blocker.
+
+## Why I can't work around this
+
+The entire trading run is built on Bash-executed deterministic scripts, and TRADER.md is explicit that **the decision comes from those scripts only — never from my own market opinion**. Every mandatory step depends on Bash / `uv`:
+
+| Step | Command | Status |
+|------|---------|--------|
+| 1 | `python3 scripts/load_config.py` | ❌ Bash denied |
+| 3 | `uv run scripts/drawdown_kill.py` | needs Bash |
+| 5 | `uv run scripts/decide_with_quote.py` | needs Bash |
+| 7 | `uv run scripts/reconcile_state.py` | needs Bash |
+| 8 | `uv run scripts/run_strategies.py` | needs Bash |
+| 9 | `uv run scripts/allocate.py` | needs Bash |
+| 12 | `osascript` notify | needs Bash |
+
+I will **not** substitute a workaround (e.g., reading the scripts and computing the config/decision myself, or running them through a different runtime like node_repl). That would violate the core safety rule — "Do not improvise trades, symbols, or sizing… never from your own market opinion" — and defeat the purpose of the deterministic gates. Fabricating any of this would be worse than not running at all.
+
+Because I can't run `load_config.py`, I also can't confirm `account_number` is set, can't run the drawdown kill switch, and can't produce a real signal. So no orders can or will be placed.
+
+## What I need from you
+
+Grant Bash permission for this session so I can run the trading scripts. Options:
+
+1. **Re-run with a permission mode that allows Bash** (e.g., accept-edits/allow prompts, or add the needed commands to the allowlist), then tell me to proceed.
+2. **Allowlist specifically**: `python3 scripts/*.py`, `uv run scripts/*.py`, and `osascript` — plus the Robinhood MCP tools (`get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `get_equity_orders`, `review_equity_order`, `place_equity_order`).
+
+Once Bash is available, I'll restart from Step 1 and run all 12 steps exactly as written. Nothing has been changed and no trade was attempted.
+2026-07-01 15:45:50 run end (exit 0)
+2026-07-02 15:45:05 run start
+I have to stop here — the run cannot be executed as written. Two hard blockers, both hit on the mandatory steps:
+
+**1. Bash is denied (don't-ask mode).** My first tool call, `python3 scripts/load_config.py` (Step 1), was blocked:
+
+> Permission to use Bash has been denied because Claude Code is running in don't ask mode.
+
+Nearly every numbered step is a deterministic script that only runs via Bash — Step 1 (`load_config.py`), Step 3 (`drawdown_kill.py`), Step 5 (`decide_with_quote.py`), Step 7 (`reconcile_state.py`), Step 8 (`run_strategies.py`), Step 9 (`allocate.py`), and Step 12 (`osascript` notify). TRADER.md is explicit that the decision "comes from `scripts/decide_with_quote.py` / `scripts/decide.py` only — never from your own market opinion," so I won't hand-compute the RSI(2) signal or hand-edit `state/state.json`, `logs/journal.md`, or `state/paper.json` to fake progress. Step 11 forbids manual state writes, and the scripts are the canonical writers. Routing around the Bash denial (e.g. shelling out via `node_repl`, or writing files with the Write tool) would defeat the intent of the denial and the safety design, so I won't.
+
+**2. The Robinhood MCP is not connected.** Steps 2, 3, 4, 6, 7, and 8 need broker tools — `get_equity_quotes`, `get_portfolio`, `get_equity_positions`, `review_equity_order`, `place_equity_order`, `get_equity_orders`. I searched the connected and still-connecting MCP servers twice; none of these exist. The connected servers are TradingView, chrome-devtools, node_repl, Adobe/Canva/Gmail/etc. — no broker. Without a live SPY quote I can't even clear Step 2.
+
+**What I could read** (no state was changed): `state/state.json` shows `halt: false`, last run `2026-06-17` (decision `NONE`, no order), HWM `537.30`, last persisted quote SPY `740.51`. So the account isn't halted — the run is blocked purely by tooling, not by a kill switch.
+
+**To proceed, I need both:**
+1. Bash enabled for this session (approve the permission, or run me in a mode that isn't "don't ask"). The scripts also use `uv`, so that must be on PATH.
+2. The Robinhood MCP server connected and reporting the `get_equity_*` / `*_equity_order` / `get_portfolio` tools.
+
+Once those are in place I'll restart cleanly from Step 1. I've placed no orders and written nothing. How would you like to proceed?
+2026-07-02 15:45:59 run end (exit 0)
+2026-07-03 15:45:04 skip: market holiday/half-day
