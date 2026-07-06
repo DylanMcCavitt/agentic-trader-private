@@ -1,10 +1,13 @@
+# Local runtime artifacts
 logs/
 __pycache__/
-.DS_Store
-config.local.json
-state/state.json
-state/paper.json
-state/allocator.json
-state/gate_equity.json
-state/gate_option.json
+.pytest_cache/
 .venv/
+.DS_Store
+
+# Local secrets — never commit
+config.local.json
+.env
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
