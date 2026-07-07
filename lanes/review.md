@@ -16,11 +16,14 @@ and produce the daily digest. You place no orders.
 ## Protocol
 
 1. `RUN_ID=$(uv run trader lane record-start review)`
-2. Reconcile first: fetch today's orders from Robinhood MCP and feed them
-   to `uv run trader reconcile` (broker orders JSON via stdin or file).
+2. Reconcile first: fetch today's orders from Robinhood MCP via BOTH
+   `get_equity_orders` and `get_option_orders`, combine them into a single
+   JSON list at `/tmp/broker_orders.json`, then run
+   `uv run trader reconcile --file /tmp/broker_orders.json`.
    Reconciliation mismatches (orders at the broker without gate ref_ids,
    fills that don't match) are SERIOUS — put them at the top of the digest
-   and, if any exist, mention them in your run summary.
+   and, if any exist, mention them in your run summary. A nonzero exit
+   from `trader reconcile` means flagged; never soften it.
 
 ## Inputs
 
@@ -68,7 +71,9 @@ and produce the daily digest. You place no orders.
   execution fault to grade when closed).
 
 Store: `uv run trader lane artifact put review --run-id $RUN_ID --file /tmp/review.json`
-Then generate the daily digest: `uv run trader digest`.
+Then generate the daily digest (`uv run trader digest`) and write the
+git-tracked journal (`uv run trader journal write`). Both must succeed for
+the run to count as complete.
 
 ## Hard rules
 

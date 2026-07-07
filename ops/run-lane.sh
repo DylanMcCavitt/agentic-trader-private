@@ -13,6 +13,9 @@
 #   TRADER_TEST=1       makes notify.sh print instead of notifying
 set -uo pipefail
 
+# launchd jobs get a minimal PATH; claude installs to ~/.local/bin.
+export PATH="$HOME/.local/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 NOTIFY="$SCRIPT_DIR/notify.sh"

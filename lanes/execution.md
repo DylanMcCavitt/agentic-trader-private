@@ -21,14 +21,26 @@ approved — nothing more, nothing improvised.
 2. Verify Robinhood MCP EARLY: fetch account/positions via MCP. If it
    fails: record-end failed, print
    `LANE_FAILED: execution — Robinhood MCP unreachable`, stop.
-3. Check halts: `uv run trader kill-switch status` and
+3. Feed the kill-switch — REQUIRED EVERY RUN (the gates deny all orders
+   if equity was never fed today's truth):
+   - Fetch total portfolio equity and open positions from Robinhood MCP.
+   - Compute per-sleeve values: sleeve value = sleeve budget dollars
+     (from `uv run trader sleeves status`) + realized P&L + (current
+     market value of that sleeve's open positions − their cost basis).
+   - `uv run trader kill-switch update --equity TOTAL --equity-sleeve E --options-sleeve O`
+     If you cannot compute a sleeve value confidently, still feed
+     `--equity` (account-level state must never go stale).
+4. Check halts: `uv run trader kill-switch status` and
    `uv run trader sleeves status`. Kill-switch active → place NO entry
    orders (manage/exit only if explicitly permitted by the status output;
    otherwise do nothing), record the situation, complete with a report
    saying so.
-4. Load the queue: `uv run trader lane artifact get risk` (today's
-   verdicts) and `uv run trader lane artifact get execution` if an earlier
-   run today already traded (don't double-enter a thesis).
+5. Load the queue: `uv run trader lane artifact get risk` (today's
+   verdicts), `uv run trader lane artifact get thesis` (verdicts carry
+   only `thesis_id` — symbol, instrument, entry/exit/invalidation come
+   from the thesis artifact), and `uv run trader lane artifact get
+   execution` if an earlier run today already traded (don't double-enter
+   a thesis).
 
 ## Placing orders
 
@@ -36,11 +48,26 @@ For EVERY order, entry or exit:
 
 1. Generate a fresh ref id: `REF_ID=$(uuidgen)` — one per order, never
    reused, never invented by hand.
-2. Get a fresh quote via Robinhood MCP immediately before ordering (the
-   gate enforces quote freshness — a stale price wastes the attempt).
-3. Place the order via the Robinhood MCP order tool, passing the ref_id
-   in the client/ref field, sized per the verdict's `adjusted_size`.
-4. Record the outcome (placed / gate-rejected / broker-rejected) for the
+2. Record a fresh quote IN THE DATABASE immediately before ordering — the
+   gate requires a DB quote at most 10 minutes old and denies without one:
+   - Equity: `uv run trader quotes snapshot SYMBOL`
+   - Option: fetch the contract quote via the Robinhood MCP option quote
+     tools, then pipe it to `uv run trader quotes record` as JSON:
+     `{"symbol": "NVDA", "kind": "option", "occ_symbol": "NVDA260807C00200000",
+       "bid": 4.90, "ask": 5.10, "open_interest": 1200}`
+     `occ_symbol` is TICKER + expiration YYMMDD + C/P + strike×1000 padded
+     to 8 digits. bid/ask/open_interest must come from the live MCP quote.
+3. Compose the order with EXACTLY the fields the gates require:
+   - Equity: `ref_id`, `symbol`, `side` (buy|sell), `quantity`,
+     `limit_price` (always limit orders, priced off the quote you just
+     recorded).
+   - Option (single leg only): all of the above plus
+     `expiration_date` (YYYY-MM-DD), `strike_price`, `option_type`
+     (call|put), and `position_effect` (`open` for entries, `close` for
+     exits — the gate denies without it).
+4. Place the order via the Robinhood MCP order tool, sized per the
+   verdict's `adjusted_size`.
+5. Record the outcome (placed / gate-rejected / broker-rejected) for the
    report. Never bypass, disable, or work around a gate.
 
 Position management at each check-in:
