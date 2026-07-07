@@ -16,6 +16,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_LANE = REPO_ROOT / "ops" / "run-lane.sh"
 
 
+@pytest.fixture(autouse=True)
+def _isolated_log_dir(tmp_path, monkeypatch):
+    """Point TRADER_LOG_DIR at a tmp dir so pytest never writes into the
+    real logs/lanes/ (stray empty logs there misled real-incident triage)."""
+    monkeypatch.setenv("TRADER_LOG_DIR", str(tmp_path / "lane-logs"))
+
+
 def run_lane(target, *, claude="/usr/bin/true", check="/usr/bin/true", ping="/usr/bin/true", extra_env=None):
     env = os.environ.copy()
     env.update(
@@ -36,7 +43,7 @@ def run_lane(target, *, claude="/usr/bin/true", check="/usr/bin/true", ping="/us
 
 @pytest.mark.parametrize(
     "script",
-    ["run-lane.sh", "notify.sh", "install.sh", "uninstall.sh"],
+    ["run-lane.sh", "notify.sh", "install.sh", "uninstall.sh", "deploy.sh", "lane-wrapper.sh"],
 )
 def test_scripts_parse(script):
     proc = subprocess.run(["bash", "-n", str(REPO_ROOT / "ops" / script)], capture_output=True, text=True)
@@ -104,3 +111,60 @@ def test_chain_premarket_runs_all_three(tmp_path):
     proc = run_lane("chain-premarket", claude=str(fake_claude))
     assert proc.returncode == 0, proc.stderr
     assert invoked.read_text().count("run") == 3
+
+
+def test_logs_written_to_trader_log_dir_not_repo(tmp_path):
+    """TRADER_LOG_DIR must fully redirect lane logs away from logs/lanes/."""
+    log_dir = tmp_path / "isolated-logs"
+    before = set((REPO_ROOT / "logs" / "lanes").glob("*")) if (REPO_ROOT / "logs" / "lanes").exists() else set()
+
+    proc = run_lane("research", extra_env={"TRADER_LOG_DIR": str(log_dir)})
+    assert proc.returncode == 0, proc.stderr
+
+    after = set((REPO_ROOT / "logs" / "lanes").glob("*")) if (REPO_ROOT / "logs" / "lanes").exists() else set()
+    assert after == before, "run-lane.sh wrote into the real logs/lanes/ despite TRADER_LOG_DIR"
+    assert list(log_dir.glob("research-*.log")), "no log written to TRADER_LOG_DIR"
+
+
+def _render_wrapper(tmp_path, deploy_root):
+    """Render lane-wrapper.sh the way install.sh does (substitute deploy root)."""
+    template = (REPO_ROOT / "ops" / "lane-wrapper.sh").read_text()
+    wrapper = tmp_path / "agentic-trader-lane"
+    wrapper.write_text(template.replace("__DEPLOY_ROOT__", str(deploy_root)))
+    wrapper.chmod(0o755)
+    return wrapper
+
+
+def test_wrapper_alarms_when_run_lane_missing(tmp_path):
+    """Broken/missing deploy worktree -> wrapper exits 1 without invoking anything.
+
+    osascript is stubbed with a PATH shim so the test never fires a real
+    notification but still proves the alarm path is exercised.
+    """
+    deploy_root = tmp_path / "deploy"  # does not exist
+    wrapper = _render_wrapper(tmp_path, deploy_root)
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "osascript").write_text('#!/bin/bash\necho "OSASCRIPT: $*"\n')
+    (bindir / "osascript").chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    proc = subprocess.run(["bash", str(wrapper), "execution"], capture_output=True, text=True, env=env)
+    assert proc.returncode == 1
+    assert "OSASCRIPT" in proc.stdout
+    assert "NOT run" in proc.stderr
+
+
+def test_wrapper_execs_run_lane_when_present(tmp_path):
+    deploy_root = tmp_path / "deploy"
+    (deploy_root / "ops").mkdir(parents=True)
+    fake_run_lane = deploy_root / "ops" / "run-lane.sh"
+    fake_run_lane.write_text('#!/bin/bash\necho "ran lane: $1 from $(pwd)"\n')
+    fake_run_lane.chmod(0o755)
+    wrapper = _render_wrapper(tmp_path, deploy_root)
+
+    proc = subprocess.run(["bash", str(wrapper), "review"], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert f"ran lane: review from {deploy_root}" in proc.stdout

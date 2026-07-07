@@ -11,13 +11,50 @@ ops/install.sh      # refuses unless machine TZ is America/New_York
 ops/uninstall.sh
 ```
 
-`install.sh` substitutes the repo path into the plists in `ops/launchd/`,
-copies them to `~/Library/LaunchAgents`, lints them, and bootstraps each
-into `gui/$UID`. launchd `StartCalendarInterval` fires in the machine's
-local timezone, which is why the TZ check is a hard refusal (override with
-`--force` only if you enjoy trading at the wrong hours).
+Scheduled runs do NOT execute from this dev checkout. `install.sh`:
+
+1. runs `ops/deploy.sh`, which creates/refreshes a **deployment worktree**
+   at `~/src/agentic-trader-deploy` (detached at current `master`), runs
+   `uv sync` there, copies `config.local.json` over, and creates `logs/`
+   and `state/` dirs;
+2. installs an **out-of-repo wrapper** at `~/.local/bin/agentic-trader-lane`
+   (from `ops/lane-wrapper.sh`) — launchd invokes this wrapper, which checks
+   that the deploy worktree's `ops/run-lane.sh` exists and alarms via inline
+   `osascript` if not (so a broken/moved repo can still notify);
+3. substitutes the wrapper and deploy-worktree paths into the plists in
+   `ops/launchd/`, copies them to `~/Library/LaunchAgents`, lints them, and
+   bootstraps each into `gui/$UID`.
+
+This exists because a branch switch in the dev tree once made
+`ops/run-lane.sh` (and `notify.sh` with it) vanish at schedule time —
+launchd exited 127 with no notification.
+
+launchd `StartCalendarInterval` fires in the machine's local timezone,
+which is why the TZ check is a hard refusal (override with `--force` only
+if you enjoy trading at the wrong hours).
 
 Verify: `launchctl list | grep agentic-trader` — six jobs.
+
+## Shipping a new version to the scheduler
+
+Merging to `master` does NOT change what the scheduler runs. After a merge:
+
+```sh
+ops/deploy.sh       # fast-forward deploy worktree to master + uv sync + re-copy config
+```
+
+`deploy.sh` discards uncommitted tracked changes in the deploy worktree
+(`git checkout --force`) — that is deliberate: the only tracked files that
+change there are `journal/` entries written by `trader journal write`, and
+those are regenerable from the DB (`uv run trader journal write --date
+YYYY-MM-DD`). Untracked files (`config.local.json`, `logs/`, `state/`)
+survive refreshes. If you change the plists or schedules themselves, re-run
+`ops/install.sh` instead.
+
+Journal entries written by scheduled lanes land in the **deploy worktree's**
+`journal/` (the writer resolves paths relative to the code that runs). To
+get them into git history, copy or regenerate them in the dev checkout and
+commit from there.
 
 A schedule missed while the Mac was asleep fires once on wake (launchd
 coalesces missed StartCalendarInterval events); a powered-off window is
@@ -40,7 +77,13 @@ the process died mid-run — check the lane log.
 
 ## Logs
 
-- `logs/lanes/<lane>-<timestamp>.log` — full Claude output per lane run.
+Scheduled runs write under the **deploy worktree**
+(`~/src/agentic-trader-deploy`); manual runs from the dev checkout write
+here. Same layout in both:
+
+- `logs/lanes/<lane>-<timestamp>.log` — full Claude output per lane run
+  (`TRADER_LOG_DIR` overrides the directory; tests use that so pytest
+  never writes real lane logs).
 - `logs/launchd/com.agentic-trader.<job>.log` — runner stdout/stderr per job.
 - `state/artifacts/YYYY-MM-DD/<lane>.json` — the day's artifacts (mirror of
   the DB copy in `lane_runs.artifact`).
