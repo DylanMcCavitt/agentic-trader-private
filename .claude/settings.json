@@ -2,20 +2,46 @@
   "permissions": {
     "allow": [
       "Read",
-      "Edit(./logs/**)",
+      "Write(./state/artifacts/**)",
       "Write(./logs/**)",
-      "Bash(uv run:*)",
-      "Bash(osascript:*)",
-      "Bash(uuidgen:*)",
+      "Edit(./lanes/**)",
+      "Write(/tmp/**)",
+      "Bash(uv run trader:*)",
+      "Bash(uv run python -m trader:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uuidgen)",
       "Bash(date:*)",
       "Bash(sleep:*)",
-      "mcp__claude_ai_Robinhood"
+      "Bash(cat:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add lanes/:*)",
+      "Bash(git checkout -b improve/:*)",
+      "Bash(git checkout main)",
+      "Bash(git commit:*)",
+      "Bash(git merge improve/:*)",
+      "WebSearch",
+      "WebFetch",
+      "mcp__claude_ai_Robinhood",
+      "mcp__robinhood"
     ],
     "deny": [
-      "Edit(./state/**)",
-      "Write(./state/**)",
+      "Read(./.env)",
+      "Read(./**/.env)",
+      "Read(./config.local.json)",
       "Read(~/.secrets/**)",
-      "Read(./**/.env)"
+      "Edit(./trader/envelope.py)",
+      "Write(./trader/envelope.py)",
+      "Edit(./trader/gates/**)",
+      "Write(./trader/gates/**)",
+      "Edit(./.claude/**)",
+      "Write(./.claude/**)",
+      "Edit(./ops/**)",
+      "Write(./ops/**)",
+      "Edit(./.github/**)",
+      "Write(./.github/**)",
+      "Bash(git push:*)"
     ]
   },
   "hooks": {
@@ -25,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/order_gate.py\""
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run python -m trader.gates.equity_gate"
           }
         ]
       },
@@ -34,7 +60,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/option_gate.py\""
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && uv run python -m trader.gates.option_gate"
           }
         ]
       }
