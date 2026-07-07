@@ -52,17 +52,34 @@ archive/         journal/logs from the previous system
 tests/           test suite
 ```
 
-## Setup
+## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/) and Docker.
+Requires [uv](https://docs.astral.sh/uv/), Docker, and the `claude` CLI
+with the Robinhood MCP connector authenticated.
 
 ```sh
 docker compose up -d        # Postgres 16 on localhost:5433
 uv sync
 uv run trader db upgrade    # run migrations
-uv run trader params show   # current tunable params + envelope bounds
-uv run pytest
+uv run trader sleeves init  # account row + equity/options sleeves
+uv run pytest               # full suite (Postgres test needs compose up)
+
+# sanity checks
+uv run trader sleeves status
+uv run trader kill-switch status   # "unknown" until execution feeds equity
+uv run trader params show          # tunables + envelope bounds
+uv run trader dry-run status       # defaults ON — orders simulate
+
+ops/install.sh              # launchd schedules (machine TZ must be ET)
+launchctl list | grep agentic-trader
 ```
+
+With `dry_run` ON the next scheduled trading day is a dress rehearsal:
+real research/theses/gates, simulated orders. Going live after that is
+[docs/go-live-checklist.md](docs/go-live-checklist.md) — verification
+steps, the `trader dry-run off` flip, week-1 half caps via `trader ramp
+start`, and the 5-clean-days criteria for `trader ramp full`. Day-to-day
+operation is [docs/runbook.md](docs/runbook.md).
 
 State lives in Postgres (`DATABASE_URL`, default
 `postgresql+psycopg://trader:trader@localhost:5433/trader`). Local secrets

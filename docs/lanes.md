@@ -129,6 +129,17 @@ approve/shrink verdicts at `adjusted_size`.
 Every order carries a fresh `uuidgen` ref_id and goes through Robinhood MCP
 tools so the PreToolUse gates fire. There is no other order path.
 
+EXECUTION's gate obligations each run: feed portfolio equity first
+(`trader kill-switch update --equity X --equity-sleeve Y --options-sleeve Z`
+— gates deny when account equity is unknown), and record a DB quote no
+older than 10 minutes immediately before every order (`trader quotes
+snapshot SYMBOL` for equities; `trader quotes record` with `kind:"option"`,
+`occ_symbol`, bid/ask/open_interest for options). Order payloads must
+include `ref_id`, `symbol`, `side`, `quantity`, `limit_price`, and for
+options additionally `expiration_date`, `strike_price`, `option_type`, and
+`position_effect` (open|close). Verdicts carry only `thesis_id`, so
+EXECUTION also reads the day's thesis artifact for symbols and exit plans.
+
 ### review → `review` artifact (grades + digest)
 
 ```json
@@ -159,23 +170,34 @@ tools so the PreToolUse gates fire. There is no other order path.
 Score is 0–10 on process quality, not P&L. `lane_at_fault` + `lesson` are
 the IMPROVE lane's raw material.
 
+REVIEW reconciles first — broker orders from the Robinhood MCP
+`get_equity_orders` + `get_option_orders` tools, fed to `trader reconcile
+--file ...` — then grades, then runs `trader digest` and
+`trader journal write`.
+
 ### improve → `improve` artifact (weekly report)
 
 ```json
 {
-  "week_ending": "YYYY-MM-DD",
-  "evidence_summary": "...",
-  "param_changes": [{"name": "...", "old": "...", "new": "...", "evidence": "..."}],
-  "prompt_changes": [{"file": "lanes/xxx.md", "change": "...", "evidence": "..."}],
-  "branch": "improve/YYYY-MM-DD",
-  "merged": false,
-  "deferred_ideas": ["..."]
+  "week": "YYYY-MM-DD",
+  "trades_graded": 0,
+  "win_rate": 0.0,
+  "avg_score": 0.0,
+  "by_lane_fault": {"research": 0, "thesis": 0, "risk": 0, "execution": 0, "none": 0},
+  "changes_made": [
+    {"type": "prompt | param", "target": "lanes/xxx.md | param_name",
+     "rationale": "...", "evidence": "..."}
+  ],
+  "watch_items": ["..."]
 }
 ```
 
-IMPROVE commits only on `improve/*` branches, only touches `lanes/*.md` and
-DB params (envelope-validated), and never touches `trader/envelope.py`,
-`trader/gates/**`, `.claude/**`, `ops/**`, or CI.
+IMPROVE commits only on `improve/*` branches (self-merged back to its base
+branch only when `uv run pytest` is green), only touches `lanes/*.md` and
+DB params (`trader params set`, envelope-validated, max 2/week), fires the
+weekly-report notification via `ops/notify.sh`, and never touches
+`trader/envelope.py`, `trader/gates/**`, `.claude/**`, `ops/**`,
+`.github/**`, or CI.
 
 ## Schedule (all times ET; machine must be on America/New_York)
 
