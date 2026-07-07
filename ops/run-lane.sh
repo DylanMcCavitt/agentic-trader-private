@@ -11,6 +11,8 @@
 #   TRADER_CHECK_CMD    command run instead of `uv run trader lane check <lane>`
 #   TRADER_PING_CMD     command run instead of `uv run trader lane ping`
 #   TRADER_TEST=1       makes notify.sh print instead of notifying
+#   TRADER_LOG_DIR      lane log directory (default $REPO_ROOT/logs/lanes);
+#                       tests set this so pytest never writes real lane logs
 set -uo pipefail
 
 # launchd jobs get a minimal PATH; claude installs to ~/.local/bin.
@@ -54,7 +56,7 @@ run_one() { # run_one <lane>
   local lane="$1"
   preflight "$lane"
 
-  local log_dir="$REPO_ROOT/logs/lanes"
+  local log_dir="${TRADER_LOG_DIR:-$REPO_ROOT/logs/lanes}"
   mkdir -p "$log_dir"
   local stamp log
   stamp="$(date +%Y-%m-%d-%H%M%S)"

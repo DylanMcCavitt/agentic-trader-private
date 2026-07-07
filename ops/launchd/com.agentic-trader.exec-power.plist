@@ -7,11 +7,11 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>__REPO_ROOT__/ops/run-lane.sh</string>
+    <string>__WRAPPER__</string>
     <string>execution</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>__REPO_ROOT__</string>
+  <string>__DEPLOY_ROOT__</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -26,8 +26,8 @@
     <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>15</integer></dict>
   </array>
   <key>StandardOutPath</key>
-  <string>__REPO_ROOT__/logs/launchd/com.agentic-trader.exec-power.log</string>
+  <string>__DEPLOY_ROOT__/logs/launchd/com.agentic-trader.exec-power.log</string>
   <key>StandardErrorPath</key>
-  <string>__REPO_ROOT__/logs/launchd/com.agentic-trader.exec-power.log</string>
+  <string>__DEPLOY_ROOT__/logs/launchd/com.agentic-trader.exec-power.log</string>
 </dict>
 </plist>
