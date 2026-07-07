@@ -19,6 +19,7 @@ def test_all_tables_present():
         "grades",
         "param_history",
         "lane_runs",
+        "quotes",
     }
 
 
