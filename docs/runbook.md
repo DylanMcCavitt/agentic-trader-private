@@ -49,6 +49,26 @@ Failure notifications arrive as macOS notifications via `ops/notify.sh`.
 The runner (`ops/run-lane.sh`) verifies each lane wrote a completed
 `lane_runs` row — a lane that exits 0 without completing still notifies.
 
+## Going live: ramp and flip
+
+The full procedure (with verification checklists) is
+`docs/go-live-checklist.md`. The short version:
+
+```sh
+# after a clean dress-rehearsal day with dry_run ON:
+uv run trader ramp start          # week-1 half caps: 2.5%/position, 3 positions,
+                                  # options sleeve latched halted (equity-only)
+uv run trader dry-run off --reason "go-live day 1 at week-1 half caps"
+
+uv run trader ramp options-on     # day 3: enable the options sleeve
+uv run trader ramp full           # after 5 clean days: envelope defaults (5%/5)
+```
+
+All ramp changes go through the same envelope validation as
+`trader params set` and are recorded in `param_history` (actor `human`).
+`trader dry-run on --reason ...` is the instant retreat at any point —
+gates immediately simulate instead of placing.
+
 ## Kill-switch trip (account 30% below HWM)
 
 What happens automatically: gates block all new orders; RISK vetoes
@@ -105,6 +125,12 @@ docker compose up -d              # start (port 5433)
 uv run trader db upgrade          # migrations
 docker compose exec postgres pg_dump -U trader trader > backup.sql
 ```
+
+On this machine the container runtime is **colima** (Docker Desktop was
+wedged and would not launch as of 2026-07-06; `docker context ls` should
+show `colima *`). Colima starts at login via `brew services start colima`,
+and the Postgres container has `restart: unless-stopped`, so both survive
+reboots. If Postgres is missing: `colima start && docker compose up -d`.
 
 `DATABASE_URL` overrides the default local URL. If Postgres is down, every
 lane fails pre-flight (`trader lane ping`) with a notification — lanes never
