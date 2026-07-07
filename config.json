@@ -6,7 +6,7 @@
   "max_order_usd": 550,
   "price_tolerance_pct": 2.0,
   "quote_max_age_sec": 900,
-  "max_option_premium_usd": 300,
+  "max_option_premium_usd": 500,
   "max_option_contracts": 1,
   "kill_drawdown_pct": 15,
   "entry_rsi": 10.0,
@@ -20,12 +20,6 @@
     "slippage_bps": 2.0,
     "option_alloc": 0.35,
     "option_spread_take": 0.25
-  },
-  "option_sleeve": {
-    "enabled": true,
-    "default": "opt_rsi2_call_aapl",
-    "candidates": ["opt_rsi2_call_aapl", "opt_rsi2_call_msft", "opt_rsi2_call_nvda", "opt_rsi2_call_googl", "opt_rsi2_call_amzn"],
-    "min_score_days": 20
   },
   "strategies": {
     "rsi2_spy": {
@@ -115,51 +109,6 @@
       "signal": "rsi2_long",
       "params": {"sma_trend": 200, "sma_exit": 5, "entry_rsi": 10.0,
                  "itm_pct": 0.04, "dte_min": 28, "dte_max": 45, "exit_dte": 7}
-    },
-    "opt_rsi2_call_aapl": {
-      "enabled": true,
-      "kind": "option",
-      "symbol": "AAPL",
-      "right": "call",
-      "signal": "rsi2_long",
-      "params": {"sma_trend": 200, "sma_exit": 5, "entry_rsi": 10.0,
-                 "itm_pct": 0.0, "dte_min": 28, "dte_max": 45, "exit_dte": 7}
-    },
-    "opt_rsi2_call_msft": {
-      "enabled": true,
-      "kind": "option",
-      "symbol": "MSFT",
-      "right": "call",
-      "signal": "rsi2_long",
-      "params": {"sma_trend": 200, "sma_exit": 5, "entry_rsi": 10.0,
-                 "itm_pct": 0.0, "dte_min": 28, "dte_max": 45, "exit_dte": 7}
-    },
-    "opt_rsi2_call_nvda": {
-      "enabled": true,
-      "kind": "option",
-      "symbol": "NVDA",
-      "right": "call",
-      "signal": "rsi2_long",
-      "params": {"sma_trend": 200, "sma_exit": 5, "entry_rsi": 10.0,
-                 "itm_pct": 0.0, "dte_min": 28, "dte_max": 45, "exit_dte": 7}
-    },
-    "opt_rsi2_call_googl": {
-      "enabled": true,
-      "kind": "option",
-      "symbol": "GOOGL",
-      "right": "call",
-      "signal": "rsi2_long",
-      "params": {"sma_trend": 200, "sma_exit": 5, "entry_rsi": 10.0,
-                 "itm_pct": 0.0, "dte_min": 28, "dte_max": 45, "exit_dte": 7}
-    },
-    "opt_rsi2_call_amzn": {
-      "enabled": true,
-      "kind": "option",
-      "symbol": "AMZN",
-      "right": "call",
-      "signal": "rsi2_long",
-      "params": {"sma_trend": 200, "sma_exit": 5, "entry_rsi": 10.0,
-                 "itm_pct": 0.0, "dte_min": 28, "dte_max": 45, "exit_dte": 7}
     }
   }
 }

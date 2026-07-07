@@ -94,7 +94,8 @@ The example is strict JSON (no comments); this file is the commentary.
 - **Units**: US dollars.
 - **Safe range**: small relative to the dedicated account's funding — a long
   option's premium is its max loss.
-- **Default**: `1500`.
+- **Default**: `500` (lowered from `1500` to fit a small dedicated account; see
+  `config.json`).
 
 ### `max_option_contracts`
 
@@ -102,7 +103,7 @@ The example is strict JSON (no comments); this file is the commentary.
   `scripts/option_gate.py`. Missing key blocks all option orders.
 - **Units**: contracts.
 - **Safe range**: `1`–`5` for a small account.
-- **Default**: `2`.
+- **Default**: `1` (lowered from `2` to fit a small dedicated account).
 
 ### `paper`
 
