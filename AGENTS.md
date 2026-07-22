@@ -48,10 +48,3 @@ exit 0 on incomplete work.
 
 - `uv` for env and deps; `uv run pytest` must pass before merge.
 - One issue → one branch → one PR. CI (pytest + gitleaks) must be green.
-
-## Review finding lifecycle
-
-- Reply in the original review thread whenever a finding is fixed, blocked, deferred, rejected, or otherwise updated.
-- Include the disposition, relevant commit, verification, and any remaining work.
-- A finding is incomplete until its thread has a current status reply, even if the code changed or the comment became outdated.
-- Do not resolve review threads without explicit authorization.
